@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Subsonic.Store;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Mvc;
@@ -85,7 +86,7 @@ public class WebController : ControllerBase
         if (string.IsNullOrEmpty(req.SubsonicUsername) || string.IsNullOrEmpty(req.JellyfinUsername) || string.IsNullOrEmpty(req.JellyfinPassword))
             return BadRequest("Missing required fields");
 
-        var jellyfinUser = await _userManager.AuthenticateUser(req.JellyfinUsername, req.JellyfinPassword, req.JellyfinPassword, "127.0.0.1", true);
+        var jellyfinUser = await _userManager.AuthenticateUser(req.JellyfinUsername, req.JellyfinPassword, "127.0.0.1", true);
         if (jellyfinUser == null) return Unauthorized("Invalid Jellyfin credentials.");
 
         var password = GeneratePassword();

@@ -8,6 +8,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Plugin.Subsonic.Auth;
 using Jellyfin.Plugin.Subsonic.Mappers;
 using Jellyfin.Plugin.Subsonic.Response;
@@ -112,7 +114,7 @@ public class SubsonicController : ControllerBase
 
     // ── Authenticated dispatch ───────────────────────────────────────────────
 
-    private async Task<IActionResult> HandleAuthenticated(string method, AuthResult auth, Jellyfin.Data.Entities.User user, Microsoft.AspNetCore.Http.IQueryCollection q, string format)
+    private async Task<IActionResult> HandleAuthenticated(string method, AuthResult auth, User user, Microsoft.AspNetCore.Http.IQueryCollection q, string format)
     {
         var p = new QueryParams(q);
 
@@ -180,7 +182,7 @@ public class SubsonicController : ControllerBase
 
     // ── getMusicFolders ──────────────────────────────────────────────────────
 
-    private IActionResult GetMusicFolders(AuthResult auth, Jellyfin.Data.Entities.User user, string format)
+    private IActionResult GetMusicFolders(AuthResult auth, User user, string format)
     {
         var saved = SubsonicStore.GetUserLibrarySettings(auth.SubsonicUsername);
 
@@ -206,14 +208,14 @@ public class SubsonicController : ControllerBase
 
     // ── getArtists / getIndexes ──────────────────────────────────────────────
 
-    private async Task<IActionResult> GetArtists(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private async Task<IActionResult> GetArtists(AuthResult auth, User user, QueryParams p, string format)
     {
         var index = await BuildArtistIndex(auth, user, p.MusicFolderId);
         var json = SubsonicEnvelope.Ok(new() { ["artists"] = BuildArtistsJson(index) });
         return Respond(format, json, XmlBuilder.Artists(index));
     }
 
-    private async Task<IActionResult> GetIndexes(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private async Task<IActionResult> GetIndexes(AuthResult auth, User user, QueryParams p, string format)
     {
         var index = await BuildArtistIndex(auth, user, p.MusicFolderId);
         var json = SubsonicEnvelope.Ok(new() { ["indexes"] = BuildArtistsJson(index) });
@@ -221,7 +223,7 @@ public class SubsonicController : ControllerBase
     }
 
     private async Task<List<(string Letter, List<(string Id, string Name, int AlbumCount)> Artists)>> BuildArtistIndex(
-        AuthResult auth, Jellyfin.Data.Entities.User user, string? musicFolderId)
+        AuthResult auth, User user, string? musicFolderId)
     {
         var folderIds = GetEffectiveFolderIds(auth, musicFolderId);
         var cacheKey = $"artistIndex:{auth.JellyfinUserId}:{(folderIds == null ? "all" : string.Join(",", folderIds.OrderBy(x => x)))}";
@@ -245,7 +247,7 @@ public class SubsonicController : ControllerBase
 
     private record ArtistCacheEntry(string Id, string Name, int AlbumCount);
 
-    private List<(string Id, string Name, int AlbumCount)> BuildArtistList(Jellyfin.Data.Entities.User user, List<string>? folderIds)
+    private List<(string Id, string Name, int AlbumCount)> BuildArtistList(User user, List<string>? folderIds)
     {
         var query = new InternalItemsQuery(user)
         {
@@ -304,7 +306,7 @@ public class SubsonicController : ControllerBase
 
     // ── getArtist ────────────────────────────────────────────────────────────
 
-    private IActionResult GetArtist(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetArtist(AuthResult auth, User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
@@ -333,7 +335,7 @@ public class SubsonicController : ControllerBase
 
     // ── getAlbum ─────────────────────────────────────────────────────────────
 
-    private IActionResult GetAlbum(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetAlbum(AuthResult auth, User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
@@ -374,7 +376,7 @@ public class SubsonicController : ControllerBase
 
     // ── getMusicDirectory ────────────────────────────────────────────────────
 
-    private IActionResult GetMusicDirectory(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetMusicDirectory(AuthResult auth, User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
@@ -414,7 +416,7 @@ public class SubsonicController : ControllerBase
 
     // ── search3 ──────────────────────────────────────────────────────────────
 
-    private IActionResult Search3(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult Search3(AuthResult auth, User user, QueryParams p, string format)
     {
         var query = p.Get("query") ?? "";
         var artistCount = p.GetInt("artistCount", 20);
@@ -465,7 +467,7 @@ public class SubsonicController : ControllerBase
 
     // ── getAlbumList / getAlbumList2 ─────────────────────────────────────────
 
-    private IActionResult GetAlbumList(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format, bool v2)
+    private IActionResult GetAlbumList(AuthResult auth, User user, QueryParams p, string format, bool v2)
     {
         var type = p.Get("type") ?? "alphabeticalByName";
         var size = Math.Min(p.GetInt("size", 10), 500);
@@ -515,7 +517,7 @@ public class SubsonicController : ControllerBase
 
     // ── getRandomSongs ───────────────────────────────────────────────────────
 
-    private IActionResult GetRandomSongs(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetRandomSongs(User user, QueryParams p, string format)
     {
         var size = Math.Min(p.GetInt("size", 10), 500);
         var songs = _library.GetItemList(new InternalItemsQuery(user)
@@ -532,7 +534,7 @@ public class SubsonicController : ControllerBase
 
     // ── getGenres ────────────────────────────────────────────────────────────
 
-    private IActionResult GetGenres(Jellyfin.Data.Entities.User user, string format)
+    private IActionResult GetGenres(User user, string format)
     {
         var genreResult = _library.GetGenres(new InternalItemsQuery(user));
         var genres = genreResult.Items.Select(g =>
@@ -565,7 +567,7 @@ public class SubsonicController : ControllerBase
 
     // ── getSongsByGenre ──────────────────────────────────────────────────────
 
-    private IActionResult GetSongsByGenre(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetSongsByGenre(User user, QueryParams p, string format)
     {
         var genre = p.Get("genre") ?? "";
         var count = Math.Min(p.GetInt("count", 10), 500);
@@ -586,7 +588,7 @@ public class SubsonicController : ControllerBase
 
     // ── getPlaylists ─────────────────────────────────────────────────────────
 
-    private IActionResult GetPlaylists(Jellyfin.Data.Entities.User user, string format)
+    private IActionResult GetPlaylists(User user, string format)
     {
         var playlists = _playlists.GetPlaylists(user.Id)
             .Select(pl => MapPlaylist(pl, user, false)).ToList();
@@ -597,7 +599,7 @@ public class SubsonicController : ControllerBase
 
     // ── getPlaylist ──────────────────────────────────────────────────────────
 
-    private IActionResult GetPlaylist(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult GetPlaylist(User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
@@ -613,7 +615,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, json, XmlBuilder.Playlist(mapped));
     }
 
-    private Dictionary<string, object?> MapPlaylist(Playlist pl, Jellyfin.Data.Entities.User user, bool includeSongs)
+    private Dictionary<string, object?> MapPlaylist(Playlist pl, User user, bool includeSongs)
     {
         var changed = pl.DateLastMediaAdded ?? pl.DateCreated;
         var songs = includeSongs
@@ -639,7 +641,7 @@ public class SubsonicController : ControllerBase
 
     // ── createPlaylist / updatePlaylist / deletePlaylist ─────────────────────
 
-    private async Task<IActionResult> CreatePlaylist(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private async Task<IActionResult> CreatePlaylist(User user, QueryParams p, string format)
     {
         var name = p.Get("name") ?? "New Playlist";
         var songIds = Request.Query["songId"].Select(s => s ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
@@ -660,7 +662,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, json, XmlBuilder.Playlist(mapped));
     }
 
-    private async Task<IActionResult> UpdatePlaylist(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private async Task<IActionResult> UpdatePlaylist(User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing playlistId");
@@ -676,7 +678,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
     }
 
-    private async Task<IActionResult> DeletePlaylist(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private async Task<IActionResult> DeletePlaylist(User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
@@ -691,7 +693,7 @@ public class SubsonicController : ControllerBase
 
     // ── star / unstar ────────────────────────────────────────────────────────
 
-    private IActionResult Star(Jellyfin.Data.Entities.User user, QueryParams p, string format, bool star)
+    private IActionResult Star(User user, QueryParams p, string format, bool star)
     {
         var ids = Request.Query["id"].Concat(Request.Query["albumId"]).Concat(Request.Query["artistId"])
             .Select(s => s ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
@@ -710,7 +712,7 @@ public class SubsonicController : ControllerBase
 
     // ── setRating ────────────────────────────────────────────────────────────
 
-    private IActionResult SetRating(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult SetRating(User user, QueryParams p, string format)
     {
         var id = p.Id;
         var rating = p.GetInt("rating", 0);
@@ -728,7 +730,7 @@ public class SubsonicController : ControllerBase
 
     // ── scrobble ─────────────────────────────────────────────────────────────
 
-    private IActionResult Scrobble(Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult Scrobble(User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
@@ -822,7 +824,7 @@ public class SubsonicController : ControllerBase
 
     // ── Shares ───────────────────────────────────────────────────────────────
 
-    private IActionResult GetShares(AuthResult auth, Jellyfin.Data.Entities.User user, string format)
+    private IActionResult GetShares(AuthResult auth, User user, string format)
     {
         var shares = SubsonicStore.GetSharesForUser(auth.SubsonicUsername);
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
@@ -831,7 +833,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, json, XmlBuilder.Shares(xmlShares));
     }
 
-    private IActionResult CreateShare(AuthResult auth, Jellyfin.Data.Entities.User user, QueryParams p, string format)
+    private IActionResult CreateShare(AuthResult auth, User user, QueryParams p, string format)
     {
         var ids = Request.Query["id"].Select(s => s ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
         var desc = p.Get("description");
@@ -876,7 +878,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
     }
 
-    private ShareXml BuildShareXml(ShareRecord s, string baseUrl, Jellyfin.Data.Entities.User user)
+    private ShareXml BuildShareXml(ShareRecord s, string baseUrl, User user)
     {
         var secret = SubsonicStore.GetShareSecret(s.ShareUid) ?? "";
         var url = $"{baseUrl}/Subsonic/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}";
@@ -901,7 +903,7 @@ public class SubsonicController : ControllerBase
 
     // ── getStarred / getStarred2 ─────────────────────────────────────────────
 
-    private IActionResult GetStarred(Jellyfin.Data.Entities.User user, string format, bool v2)
+    private IActionResult GetStarred(User user, string format, bool v2)
     {
         var artists = _library.GetItemList(new InternalItemsQuery(user)
         { IncludeItemTypes = [BaseItemKind.MusicArtist], IsFavorite = true, Recursive = true })
@@ -1004,7 +1006,7 @@ public class SubsonicController : ControllerBase
         return Redirect($"/Items/{guid:N}/Images/Primary");
     }
 
-    private IActionResult GetAvatar(Jellyfin.Data.Entities.User user) =>
+    private IActionResult GetAvatar(User user) =>
         Redirect($"/Users/{user.Id}/Images/Primary");
 
     // ── Helpers ──────────────────────────────────────────────────────────────

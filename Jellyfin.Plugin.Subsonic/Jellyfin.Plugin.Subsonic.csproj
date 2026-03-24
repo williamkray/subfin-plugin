@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <AssemblyName>Jellyfin.Plugin.Subsonic</AssemblyName>
     <RootNamespace>Jellyfin.Plugin.Subsonic</RootNamespace>
     <AssemblyVersion>0.1.0</AssemblyVersion>
@@ -19,8 +19,9 @@
 
   <ItemGroup>
     <!-- Jellyfin SDK references — provided by the host at runtime -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.9.11" />
-    <PackageReference Include="Jellyfin.Model" Version="10.9.11" />
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.6" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
+    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.6" />
     <!-- SQLite -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
     <!-- BCrypt for app password hashing -->

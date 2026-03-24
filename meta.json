@@ -7,7 +7,7 @@
   "name": "Subsonic",
   "overview": "Exposes an OpenSubsonic-compatible REST API at /rest/* so that Subsonic clients can browse and stream your Jellyfin music library.",
   "owner": "subfin",
-  "targetAbi": "10.9.0.0",
+  "targetAbi": "10.11.0.0",
   "timestamp": "2026-01-01T00:00:00Z",
   "version": "0.1.0"
 }
