@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shared Music — Subfin Plugin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; }
+    p { color: #666; }
+    a { color: #0070f3; }
+  </style>
+</head>
+<body>
+  <h1>Shared Music</h1>
+  <p>Share ID: {{SHARE_UID}}</p>
+  <p><a href="/Subsonic/share/{{SHARE_UID}}/m3u?secret={{SECRET}}">Open as M3U playlist</a></p>
+  <p><a href="/Subsonic/share/{{SHARE_UID}}/zip?secret={{SECRET}}">Download as ZIP</a></p>
+</body>
+</html>

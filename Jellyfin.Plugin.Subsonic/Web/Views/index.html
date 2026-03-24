@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subfin Plugin — Subsonic Device Manager</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.5rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    input, button { margin: 0.25rem 0; padding: 0.4rem 0.8rem; }
+    button { cursor: pointer; background: #0070f3; color: white; border: none; border-radius: 4px; }
+    button.danger { background: #e00; }
+    .device { display: flex; gap: 1rem; align-items: center; padding: 0.5rem; border-bottom: 1px solid #eee; }
+    .device:last-child { border-bottom: none; }
+    #status { padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; display: none; }
+    #status.ok { background: #d4edda; color: #155724; display: block; }
+    #status.err { background: #f8d7da; color: #721c24; display: block; }
+  </style>
+</head>
+<body>
+  <h1>Subfin Plugin — Subsonic Device Manager</h1>
+  <p>Link Subsonic clients to your Jellyfin account by creating app passwords here.</p>
+
+  <div id="status"></div>
+
+  <div class="card">
+    <h2>Link a New Device</h2>
+    <label>Subsonic username (pick any):<br>
+      <input type="text" id="subsonicUsername" placeholder="e.g. alice">
+    </label><br>
+    <label>Jellyfin username:<br>
+      <input type="text" id="jellyfinUsername" placeholder="Jellyfin login">
+    </label><br>
+    <label>Jellyfin password:<br>
+      <input type="password" id="jellyfinPassword">
+    </label><br>
+    <label>Device label (optional):<br>
+      <input type="text" id="deviceLabel" placeholder="e.g. DSub on Phone">
+    </label><br>
+    <button onclick="linkDevice()">Link Device</button>
+  </div>
+
+  <div class="card">
+    <h2>My Devices</h2>
+    <label>Subsonic username:<br>
+      <input type="text" id="listUsername" placeholder="e.g. alice">
+    </label>
+    <button onclick="loadDevices()">Load</button>
+    <div id="deviceList"></div>
+  </div>
+
+  <script>
+    function status(msg, ok) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.className = ok ? 'ok' : 'err';
+    }
+
+    async function linkDevice() {
+      const body = {
+        subsonicUsername: document.getElementById('subsonicUsername').value,
+        jellyfinUsername: document.getElementById('jellyfinUsername').value,
+        jellyfinPassword: document.getElementById('jellyfinPassword').value,
+        deviceLabel: document.getElementById('deviceLabel').value,
+      };
+      const r = await fetch('/Subsonic/api/devices/link', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { status(d.message || 'Error linking device', false); return; }
+      status(`Device linked! Password: ${d.password} (save this now — it won't be shown again)`, true);
+    }
+
+    async function loadDevices() {
+      const u = document.getElementById('listUsername').value;
+      const r = await fetch(`/Subsonic/api/devices?username=${encodeURIComponent(u)}`);
+      const devices = await r.json();
+      const el = document.getElementById('deviceList');
+      if (!devices.length) { el.innerHTML = '<p>No devices found.</p>'; return; }
+      el.innerHTML = devices.map(d => `
+        <div class="device">
+          <span>${d.deviceLabel || '(no label)'} — linked ${d.createdAt}</span>
+          <button onclick="deleteDevice(${d.id}, '${u}')">Unlink</button>
+          <button onclick="resetPassword(${d.id}, '${u}')">Reset Password</button>
+        </div>`).join('');
+    }
+
+    async function deleteDevice(id, username) {
+      if (!confirm('Unlink this device?')) return;
+      await fetch(`/Subsonic/api/devices/${id}`, { method: 'DELETE' });
+      loadDevices();
+    }
+
+    async function resetPassword(id, username) {
+      const r = await fetch(`/Subsonic/api/devices/${id}/reset-password`, { method: 'POST' });
+      const d = await r.json();
+      status(`New password: ${d.password} (save this now — it won't be shown again)`, true);
+    }
+  </script>
+</body>
+</html>

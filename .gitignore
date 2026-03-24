@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+.DS_Store
+localenv/
+*.db
+*.db-wal
+*.db-shm
