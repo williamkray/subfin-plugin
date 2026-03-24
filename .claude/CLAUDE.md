@@ -1,6 +1,6 @@
 # CLAUDE.md — subfin-plugin
 
-Jellyfin native Subsonic plugin (C#/.NET 8). Ported from the Node.js `subfin` project.
+Jellyfin native Subsonic plugin (C#/.NET 9, Jellyfin 10.11.6). Ported from the Node.js `subfin` project.
 
 ## What this is
 
@@ -11,7 +11,17 @@ An OpenSubsonic-compatible REST API exposed as a Jellyfin plugin. Subsonic/Navid
 ```bash
 dotnet build                        # must pass before any commit
 dotnet test                         # run xUnit tests
+./scripts/deploy-dev.sh             # build + deploy to localenv Jellyfin + smoke test
 ```
+
+## Localenv
+
+Jellyfin runs in `../subfin/localenv/` (docker compose). The plugin dir is:
+`../subfin/localenv/jellyfin-data/config/plugins/Subsonic_0.1.0.0/`
+
+**meta.json footgun:** when Jellyfin fails to load a plugin it overwrites meta.json with
+`"status": "NotSupported"` and `"assemblies": []`, silently skipping it on future restarts.
+`deploy-dev.sh` always resets meta.json to the known-good state.
 
 ## Architecture
 
@@ -59,10 +69,29 @@ Subsonic client → /rest/{method} → SubsonicController → SubsonicAuth.Resol
 - `ISessionManager` — now playing sessions
 - `IPlaylistManager` — CRUD playlists, GetPlaylists(userId)
 
-## Critical Jellyfin 10.9.11 API patterns
+## Critical Jellyfin 10.11.6 API patterns
+
+> **Target version:** `net9.0`, `Jellyfin.Controller/Model 10.11.6`, `Jellyfin.Database.Implementations 10.11.6`
+
+### Breaking changes from 10.9.x → 10.11.x
+
+| What | Old (10.9.x) | New (10.11.x) |
+|------|-------------|--------------|
+| `User` entity | `Jellyfin.Data.Entities.User` | `Jellyfin.Database.Implementations.Entities.User` |
+| `SortOrder` enum | `Jellyfin.Data.Enums.SortOrder` | `Jellyfin.Database.Implementations.Enums.SortOrder` |
+| `IUserManager.AuthenticateUser` | 5 args (username, password, passwordMd5, endpoint, isSession) | 4 args (username, password, endpoint, isSession) |
+
+Required usings (10.11.x):
+```csharp
+using Jellyfin.Data.Enums;                          // ItemSortBy, BaseItemKind
+using Jellyfin.Database.Implementations.Entities;   // User
+using Jellyfin.Database.Implementations.Enums;      // SortOrder
+```
 
 ### Namespaces
-- `BaseItemKind`, `ItemSortBy`, `SortOrder` → `Jellyfin.Data.Enums`
+- `BaseItemKind`, `ItemSortBy` → `Jellyfin.Data.Enums`
+- `SortOrder` → `Jellyfin.Database.Implementations.Enums`
+- `User` → `Jellyfin.Database.Implementations.Entities`
 - `CollectionTypeOptions` (e.g. `.music`) → `MediaBrowser.Model.Entities`
 - `InternalItemsQuery` → `MediaBrowser.Controller.Entities` (not `MediaBrowser.Model.Querying`)
 
