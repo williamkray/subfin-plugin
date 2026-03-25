@@ -145,14 +145,14 @@
       }
 
       list.innerHTML = devices.map(d => `
-        <div class="device-row" id="device-${d.id}">
+        <div class="device-row" id="device-${d.Id}">
           <div class="device-info">
-            <div class="device-label">${escHtml(d.deviceLabel || '(no label)')}</div>
-            <div class="device-meta">username: ${escHtml(d.subsonicUsername)} &nbsp;·&nbsp; linked ${escHtml(d.createdAt)}</div>
+            <div class="device-label">${escHtml(d.DeviceLabel || '(no label)')}</div>
+            <div class="device-meta">username: ${escHtml(d.SubsonicUsername)} &nbsp;·&nbsp; linked ${escHtml(d.CreatedAt)}</div>
           </div>
           <div class="btn-row">
-            <button class="secondary" onclick="resetPassword(${d.id})">Reset Password</button>
-            <button class="danger" onclick="deleteDevice(${d.id})">Unlink</button>
+            <button class="secondary" onclick="resetPassword(${d.Id})">Reset Password</button>
+            <button class="danger" onclick="deleteDevice(${d.Id})">Unlink</button>
           </div>
         </div>`).join('');
     }
@@ -161,7 +161,7 @@
       if (!confirm('Unlink this device? The Subsonic client using it will stop working.')) return;
       const r = await fetch(`/Subsonic/api/devices/${id}`, { method: 'DELETE', headers: authHeaders() });
       if (!r.ok) { showBanner('Unlink failed (' + r.status + ')', false); return; }
-      document.getElementById('device-' + id)?.remove();
+      document.getElementById(`device-${id}`)?.remove();
       const list = document.getElementById('deviceList');
       if (!list.querySelector('.device-row'))
         list.innerHTML = '<p id="noDevices">No devices linked yet.</p>';
