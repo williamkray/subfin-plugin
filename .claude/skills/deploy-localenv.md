@@ -21,5 +21,7 @@ User asks to deploy, install, test in localenv, or "try it out".
 |---------|-------|-----|
 | `Skipping disabled plugin` | Jellyfin cached `status=NotSupported` in meta.json from a previous bad load | Script resets meta.json; re-run script |
 | `Failed to load assembly … incompatible version` | DLL targets wrong Jellyfin ABI | Check `targetAbi` in meta.json matches running Jellyfin version (`docker logs jellyfin \| grep "Jellyfin version"`) |
+| `Could not load file or assembly 'SomeLib'` at request time | Third-party dep not in plugin folder or not in `assemblies[]` | Run `dotnet publish`, copy the DLL, add it to `assemblies[]` in deploy script — see CLAUDE.md §Third-party dep bundling |
 | `docker: No such container: jellyfin` | localenv not running | `cd ../subfin/localenv && docker compose up -d jellyfin` |
 | Build error `CS0234 … Entities` | Jellyfin API namespace changed (see CLAUDE.md §10.11.6) | Fix usings per CLAUDE.md |
+| Frontend calls `.../undefined` | JSON field case mismatch — record properties are PascalCase, anonymous objects are camelCase | See CLAUDE.md §JSON casing gotcha |

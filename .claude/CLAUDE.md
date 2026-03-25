@@ -23,6 +23,14 @@ Jellyfin runs in `../subfin/localenv/` (docker compose). The plugin dir is:
 `"status": "NotSupported"` and `"assemblies": []`, silently skipping it on future restarts.
 `deploy-dev.sh` always resets meta.json to the known-good state.
 
+**Third-party dep bundling:** `dotnet build` does NOT copy transitive deps to output — use
+`dotnet publish`. Jellyfin ships SQLite/EF Core/ASP.NET Core; only genuinely third-party
+packages need bundling (currently: `BCrypt.Net-Next.dll`). Each bundled DLL must be listed
+in `meta.json "assemblies"[]`, otherwise Jellyfin's plugin load context won't resolve it.
+
+**Checking what Jellyfin already ships:** `docker exec jellyfin ls /jellyfin/` — avoid
+bundling anything already there to keep the plugin dir minimal.
+
 ## Architecture
 
 ### Request flow
@@ -155,6 +163,32 @@ _userData.SaveUserData(user, item, data, UserDataSaveReason.UpdateUserRating, Ca
 ```csharp
 _library.DeleteItem(item, new DeleteOptions());   // takes BaseItem, not Guid
 ```
+
+## Web UI auth pattern
+
+The `/Subsonic/` page uses the Jellyfin session — no separate login.
+
+**Frontend** reads token from `localStorage["jellyfin_credentials"]`:
+```javascript
+const raw = localStorage.getItem('jellyfin_credentials');
+const token = JSON.parse(raw)?.Servers?.[0]?.AccessToken;
+// Send as: Authorization: MediaBrowser Token="<token>"
+// Redirect on missing/invalid token: window.location.replace('/web/index.html#!/login.html')
+```
+
+**Backend** uses `[Authorize(AuthenticationSchemes = "CustomAuthentication")]`:
+```csharp
+var userIdStr = User.FindFirst("Jellyfin-UserId")?.Value;  // claim set by Jellyfin's auth middleware
+Guid.TryParse(userIdStr, out var userId);
+var user = _userManager.GetUserById(userId);
+```
+
+**JSON casing gotcha:** Jellyfin serializes JSON with the property names as written in C#.
+- Named types (records, classes) → PascalCase (`Id`, `DeviceLabel`, `CreatedAt`)
+- Anonymous objects → camelCase as written (`deviceId`, `subsonicUsername`, `password`)
+Keep frontend field references consistent with this: `d.Id`, `d.DeviceLabel` for record
+responses; `d.deviceId`, `d.password` for anonymous object responses. Mixing these up causes
+silent `undefined` values that produce requests to `.../undefined`.
 
 ## XML response pattern (CRITICAL)
 
