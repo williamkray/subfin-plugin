@@ -10,16 +10,19 @@ LOCALENV="$REPO_ROOT/../subfin/localenv"
 PLUGIN_DIR="$LOCALENV/jellyfin-data/config/plugins/Subsonic_0.1.0.0"
 META_SRC="$REPO_ROOT/meta.json"
 
-# 1. Build
-echo "[deploy] Building Release..."
-dotnet build -c Release "$REPO_ROOT" --nologo -v quiet
+# 1. Publish (gets all dependencies including third-party ones)
+echo "[deploy] Publishing Release..."
+dotnet publish -c Release "$REPO_ROOT/Jellyfin.Plugin.Subsonic" --nologo -v quiet
 
-DLL="$REPO_ROOT/Jellyfin.Plugin.Subsonic/bin/Release/net9.0/Jellyfin.Plugin.Subsonic.dll"
+PUBLISH="$REPO_ROOT/Jellyfin.Plugin.Subsonic/bin/Release/net9.0/publish"
 
-# 2. Copy DLL
-echo "[deploy] Copying DLL to $PLUGIN_DIR"
+# 2. Copy plugin DLL + third-party deps not provided by Jellyfin at runtime.
+#    Jellyfin ships: Microsoft.Data.Sqlite, SQLitePCLRaw.*, EF Core, ASP.NET Core.
+#    We need to bundle: BCrypt.Net-Next (and any future deps we add).
+echo "[deploy] Copying DLL and bundled deps to $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
-cp "$DLL" "$PLUGIN_DIR/"
+cp "$PUBLISH/Jellyfin.Plugin.Subsonic.dll" "$PLUGIN_DIR/"
+cp "$PUBLISH/BCrypt.Net-Next.dll" "$PLUGIN_DIR/"
 
 # 3. Write meta.json — always restore to known-good state.
 # Jellyfin overwrites meta.json with status=NotSupported/assemblies=[] on load failure;
@@ -41,7 +44,8 @@ cat > "$PLUGIN_DIR/meta.json" << EOF
   "status": "Active",
   "autoUpdate": false,
   "assemblies": [
-    "Jellyfin.Plugin.Subsonic.dll"
+    "Jellyfin.Plugin.Subsonic.dll",
+    "BCrypt.Net-Next.dll"
   ]
 }
 EOF
