@@ -101,12 +101,14 @@
     function showBanner(msg, ok) {
       const el = document.getElementById('banner');
       el.textContent = msg;
+      el.style.display = '';
       el.className = ok ? 'ok' : 'err';
     }
 
     function clearBanner() {
-      document.getElementById('banner').className = '';
-      document.getElementById('banner').style.display = 'none';
+      const el = document.getElementById('banner');
+      el.className = '';
+      el.style.display = '';
     }
 
     // ── Link device ───────────────────────────────────────────────────────────
