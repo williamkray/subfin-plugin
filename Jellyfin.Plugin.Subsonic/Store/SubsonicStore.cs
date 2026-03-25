@@ -111,6 +111,17 @@ public static class SubsonicStore
         return list;
     }
 
+    public static List<LinkedDevice> GetDevicesByJellyfinUserId(string jellyfinUserId)
+    {
+        var list = new List<LinkedDevice>();
+        using var cmd = Db.CreateCommand();
+        cmd.CommandText = "SELECT * FROM linked_devices WHERE jellyfin_user_id = @jid ORDER BY id";
+        cmd.Parameters.AddWithValue("@jid", jellyfinUserId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) list.Add(ReadDevice(reader));
+        return list;
+    }
+
     public static LinkedDevice? GetDeviceById(long id)
     {
         using var cmd = Db.CreateCommand();

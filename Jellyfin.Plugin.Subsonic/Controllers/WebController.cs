@@ -92,53 +92,62 @@ public class WebController : ControllerBase
     // ── API: device management ───────────────────────────────────────────────
 
     [HttpGet("api/devices")]
-    public IActionResult ListDevices([FromQuery] string username)
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult ListDevices()
     {
-        if (string.IsNullOrEmpty(username)) return BadRequest("username required");
-        var devices = SubsonicStore.GetDevicesForUser(username);
-        return Ok(devices.Select(d => new { d.Id, d.DeviceLabel, d.JellyfinUserId, d.CreatedAt }));
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        var devices = SubsonicStore.GetDevicesByJellyfinUserId(user.Id.ToString("N"));
+        return Ok(devices.Select(d => new { d.Id, d.DeviceLabel, d.SubsonicUsername, d.CreatedAt }));
     }
 
     /// <summary>
-    /// Links a new device. Authenticates via the active Jellyfin session token
-    /// (Authorization header); no password re-entry required.
+    /// Links a new device using the active Jellyfin session; Jellyfin username
+    /// becomes the Subsonic username — no separate field needed.
     /// </summary>
     [HttpPost("api/devices/link")]
     [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult LinkDevice([FromBody] LinkDeviceRequest req)
     {
-        if (string.IsNullOrEmpty(req.SubsonicUsername))
-            return BadRequest("subsonicUsername is required");
-
-        var userIdStr = User.FindFirst("Jellyfin-UserId")?.Value;
-        if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
-        var jellyfinUser = _userManager.GetUserById(userId);
-        if (jellyfinUser == null) return Unauthorized();
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
 
         var password = GeneratePassword();
-        var deviceId = SubsonicStore.InsertDevice(req.SubsonicUsername, jellyfinUser.Id.ToString("N"), password, req.DeviceLabel ?? "", null, null);
+        var deviceId = SubsonicStore.InsertDevice(user.Username, user.Id.ToString("N"), password, req.DeviceLabel ?? "", null, null);
 
-        return Ok(new { deviceId, password, message = "Device linked. Save this password — it will not be shown again." });
+        return Ok(new { deviceId, subsonicUsername = user.Username, password, message = "Device linked. Save this password — it will not be shown again." });
     }
 
     [HttpPost("api/devices/{id}/rename")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult RenameDevice(long id, [FromBody] RenameRequest req)
     {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!OwnedBy(id, user)) return Forbid();
         SubsonicStore.UpdateDeviceLabel(id, req.Label ?? "");
         return Ok();
     }
 
     [HttpPost("api/devices/{id}/reset-password")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult ResetPassword(long id)
     {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!OwnedBy(id, user)) return Forbid();
         var password = GeneratePassword();
         SubsonicStore.UpdateDevicePassword(id, password);
         return Ok(new { password, message = "Password reset. Save this password — it will not be shown again." });
     }
 
     [HttpDelete("api/devices/{id}")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult DeleteDevice(long id)
     {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!OwnedBy(id, user)) return Forbid();
         SubsonicStore.DeleteDevice(id);
         return Ok();
     }
@@ -197,6 +206,22 @@ public class WebController : ControllerBase
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /// <summary>Resolve the current Jellyfin user from claims, or return an error result.</summary>
+    private (User? user, IActionResult? error) ResolveUser()
+    {
+        var userIdStr = User.FindFirst("Jellyfin-UserId")?.Value;
+        if (!Guid.TryParse(userIdStr, out var userId)) return (null, Unauthorized());
+        var user = _userManager.GetUserById(userId);
+        return user == null ? (null, Unauthorized()) : (user, null);
+    }
+
+    /// <summary>Returns true if the device with the given id belongs to the given user.</summary>
+    private static bool OwnedBy(long deviceId, User user)
+    {
+        var device = SubsonicStore.GetDeviceById(deviceId);
+        return device != null && device.JellyfinUserId == user.Id.ToString("N");
+    }
+
     private static string GetEmbeddedHtml(string filename)
     {
         var asm = Assembly.GetExecutingAssembly();
@@ -213,7 +238,7 @@ public class WebController : ControllerBase
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
-public record LinkDeviceRequest(string SubsonicUsername, string? DeviceLabel);
+public record LinkDeviceRequest(string? DeviceLabel);
 public record RenameRequest(string? Label);
 public record QuickConnectStartRequest(string SubsonicUsername);
 public record QuickConnectCompleteRequest(string Secret, string SubsonicUsername, string? DeviceLabel);
