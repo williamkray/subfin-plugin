@@ -11,6 +11,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Subsonic.Store;
 using MediaBrowser.Controller.Library;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 
@@ -70,6 +71,24 @@ public class WebController : ControllerBase
         return Content(html, "text/html; charset=utf-8");
     }
 
+    // ── API: session ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the current Jellyfin user's id and display name.
+    /// Requires a valid Jellyfin session token in the Authorization header:
+    ///   Authorization: MediaBrowser Token="&lt;token&gt;"
+    /// </summary>
+    [HttpGet("api/me")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult GetMe()
+    {
+        var userIdStr = User.FindFirst("Jellyfin-UserId")?.Value;
+        if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
+        var user = _userManager.GetUserById(userId);
+        if (user == null) return Unauthorized();
+        return Ok(new { id = user.Id.ToString("N"), name = user.Username });
+    }
+
     // ── API: device management ───────────────────────────────────────────────
 
     [HttpGet("api/devices")]
@@ -80,14 +99,21 @@ public class WebController : ControllerBase
         return Ok(devices.Select(d => new { d.Id, d.DeviceLabel, d.JellyfinUserId, d.CreatedAt }));
     }
 
+    /// <summary>
+    /// Links a new device. Authenticates via the active Jellyfin session token
+    /// (Authorization header); no password re-entry required.
+    /// </summary>
     [HttpPost("api/devices/link")]
-    public async Task<IActionResult> LinkDevice([FromBody] LinkDeviceRequest req)
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult LinkDevice([FromBody] LinkDeviceRequest req)
     {
-        if (string.IsNullOrEmpty(req.SubsonicUsername) || string.IsNullOrEmpty(req.JellyfinUsername) || string.IsNullOrEmpty(req.JellyfinPassword))
-            return BadRequest("Missing required fields");
+        if (string.IsNullOrEmpty(req.SubsonicUsername))
+            return BadRequest("subsonicUsername is required");
 
-        var jellyfinUser = await _userManager.AuthenticateUser(req.JellyfinUsername, req.JellyfinPassword, "127.0.0.1", true);
-        if (jellyfinUser == null) return Unauthorized("Invalid Jellyfin credentials.");
+        var userIdStr = User.FindFirst("Jellyfin-UserId")?.Value;
+        if (!Guid.TryParse(userIdStr, out var userId)) return Unauthorized();
+        var jellyfinUser = _userManager.GetUserById(userId);
+        if (jellyfinUser == null) return Unauthorized();
 
         var password = GeneratePassword();
         var deviceId = SubsonicStore.InsertDevice(req.SubsonicUsername, jellyfinUser.Id.ToString("N"), password, req.DeviceLabel ?? "", null, null);
@@ -187,7 +213,7 @@ public class WebController : ControllerBase
 
 // ── Request DTOs ──────────────────────────────────────────────────────────────
 
-public record LinkDeviceRequest(string SubsonicUsername, string JellyfinUsername, string JellyfinPassword, string? DeviceLabel);
+public record LinkDeviceRequest(string SubsonicUsername, string? DeviceLabel);
 public record RenameRequest(string? Label);
 public record QuickConnectStartRequest(string SubsonicUsername);
 public record QuickConnectCompleteRequest(string Secret, string SubsonicUsername, string? DeviceLabel);

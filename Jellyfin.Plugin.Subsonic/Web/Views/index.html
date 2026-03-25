@@ -5,96 +5,207 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Subfin Plugin — Subsonic Device Manager</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; color: #eee; background: #1a1a1a; }
     h1 { font-size: 1.5rem; }
-    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-    input, button { margin: 0.25rem 0; padding: 0.4rem 0.8rem; }
-    button { cursor: pointer; background: #0070f3; color: white; border: none; border-radius: 4px; }
-    button.danger { background: #e00; }
-    .device { display: flex; gap: 1rem; align-items: center; padding: 0.5rem; border-bottom: 1px solid #eee; }
+    h2 { font-size: 1.1rem; margin-top: 0; }
+    .card { border: 1px solid #444; border-radius: 8px; padding: 1rem; margin: 1rem 0; background: #252525; }
+    label { display: block; margin: 0.5rem 0 0.2rem; font-size: 0.9rem; color: #aaa; }
+    input { display: block; width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem; background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; margin-bottom: 0.4rem; }
+    button { cursor: pointer; padding: 0.4rem 1rem; background: #0070f3; color: white; border: none; border-radius: 4px; margin-right: 0.4rem; }
+    button.danger { background: #c00; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .device { display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #333; flex-wrap: wrap; }
     .device:last-child { border-bottom: none; }
-    #status { padding: 0.5rem; border-radius: 4px; margin: 0.5rem 0; display: none; }
-    #status.ok { background: #d4edda; color: #155724; display: block; }
-    #status.err { background: #f8d7da; color: #721c24; display: block; }
+    .device-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #status { padding: 0.6rem 0.8rem; border-radius: 4px; margin: 0.5rem 0; display: none; font-size: 0.9rem; word-break: break-all; }
+    #status.ok { background: #1a3d1a; color: #6cda6c; display: block; }
+    #status.err { background: #3d1a1a; color: #da6c6c; display: block; }
+    .session-info { font-size: 0.85rem; color: #aaa; margin-bottom: 0.75rem; }
+    .session-info strong { color: #eee; }
+    #sessionError { display: none; font-size: 0.85rem; color: #da6c6c; background: #3d1a1a; padding: 0.5rem 0.8rem; border-radius: 4px; margin-bottom: 0.75rem; }
   </style>
 </head>
 <body>
   <h1>Subfin Plugin — Subsonic Device Manager</h1>
-  <p>Link Subsonic clients to your Jellyfin account by creating app passwords here.</p>
 
   <div id="status"></div>
+  <div id="sessionError"></div>
 
   <div class="card">
     <h2>Link a New Device</h2>
-    <label>Subsonic username (pick any):<br>
-      <input type="text" id="subsonicUsername" placeholder="e.g. alice">
-    </label><br>
-    <label>Jellyfin username:<br>
-      <input type="text" id="jellyfinUsername" placeholder="Jellyfin login">
-    </label><br>
-    <label>Jellyfin password:<br>
-      <input type="password" id="jellyfinPassword">
-    </label><br>
-    <label>Device label (optional):<br>
+    <div id="sessionInfo" class="session-info" style="display:none">
+      Linking as Jellyfin user: <strong id="jellyfinDisplayName"></strong>
+    </div>
+    <label>Subsonic username (what you'll enter in the Subsonic client):
+      <input type="text" id="subsonicUsername" placeholder="e.g. alice" autocomplete="username">
+    </label>
+    <label>Device label (optional):
       <input type="text" id="deviceLabel" placeholder="e.g. DSub on Phone">
-    </label><br>
-    <button onclick="linkDevice()">Link Device</button>
+    </label>
+    <button id="linkBtn" onclick="linkDevice()" disabled>Link Device</button>
   </div>
 
   <div class="card">
     <h2>My Devices</h2>
-    <label>Subsonic username:<br>
-      <input type="text" id="listUsername" placeholder="e.g. alice">
-    </label>
-    <button onclick="loadDevices()">Load</button>
+    <p id="devicesHint" style="color:#aaa;font-size:0.9rem;margin-top:0">Loading your devices…</p>
     <div id="deviceList"></div>
   </div>
 
   <script>
-    function status(msg, ok) {
+    // ── Jellyfin session ──────────────────────────────────────────────────────
+
+    let jellyfinToken = null;
+    let jellyfinUserId = null;
+    let subsonicUsernameForList = null;
+
+    function authHeader() {
+      return jellyfinToken
+        ? { 'Authorization': `MediaBrowser Token="${jellyfinToken}"` }
+        : {};
+    }
+
+    // Extract token from the Jellyfin web client's localStorage credentials.
+    // Jellyfin stores credentials as JSON under the key "jellyfin_credentials"
+    // with the structure: { Servers: [{ accessToken, UserId, UserName, ... }] }
+    function readJellyfinToken() {
+      try {
+        const raw = localStorage.getItem('jellyfin_credentials');
+        if (!raw) return null;
+        const creds = JSON.parse(raw);
+        const servers = creds?.Servers ?? creds?.servers;
+        if (!Array.isArray(servers) || servers.length === 0) return null;
+        // Pick the first server that has a token
+        for (const s of servers) {
+          const token = s.AccessToken ?? s.accessToken;
+          if (token) return token;
+        }
+      } catch {}
+      return null;
+    }
+
+    async function initSession() {
+      const token = readJellyfinToken();
+      if (!token) {
+        showSessionError('Could not find a Jellyfin session in localStorage. ' +
+          'Make sure you are logged in to Jellyfin in this browser.');
+        document.getElementById('linkBtn').disabled = false; // allow fallback
+        return;
+      }
+
+      try {
+        const r = await fetch('/Subsonic/api/me', {
+          headers: { 'Authorization': `MediaBrowser Token="${token}"` }
+        });
+        if (!r.ok) {
+          showSessionError('Jellyfin session token found but /api/me returned ' + r.status +
+            '. Try logging out and back into Jellyfin.');
+          return;
+        }
+        const me = await r.json();
+        jellyfinToken = token;
+        jellyfinUserId = me.id;
+
+        document.getElementById('jellyfinDisplayName').textContent = me.name;
+        document.getElementById('sessionInfo').style.display = '';
+        document.getElementById('linkBtn').disabled = false;
+
+        // Auto-load devices for this user (using their id as a stable key)
+        subsonicUsernameForList = null; // will be loaded from all devices
+        loadDevicesForUser(me.id);
+      } catch (e) {
+        showSessionError('Could not verify Jellyfin session: ' + e.message);
+      }
+    }
+
+    function showSessionError(msg) {
+      const el = document.getElementById('sessionError');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    // ── Status banner ─────────────────────────────────────────────────────────
+
+    function showStatus(msg, ok) {
       const el = document.getElementById('status');
       el.textContent = msg;
       el.className = ok ? 'ok' : 'err';
     }
 
+    // ── Link device ───────────────────────────────────────────────────────────
+
     async function linkDevice() {
-      const body = {
-        subsonicUsername: document.getElementById('subsonicUsername').value,
-        jellyfinUsername: document.getElementById('jellyfinUsername').value,
-        jellyfinPassword: document.getElementById('jellyfinPassword').value,
-        deviceLabel: document.getElementById('deviceLabel').value,
-      };
-      const r = await fetch('/Subsonic/api/devices/link', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      const subsonicUsername = document.getElementById('subsonicUsername').value.trim();
+      if (!subsonicUsername) { showStatus('Subsonic username is required.', false); return; }
+      if (!jellyfinToken) { showStatus('No Jellyfin session — reload the page while logged in to Jellyfin.', false); return; }
+
+      const body = { subsonicUsername, deviceLabel: document.getElementById('deviceLabel').value };
+      const r = await fetch('/Subsonic/api/devices/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify(body),
+      });
       const d = await r.json();
-      if (!r.ok) { status(d.message || 'Error linking device', false); return; }
-      status(`Device linked! Password: ${d.password} (save this now — it won't be shown again)`, true);
+      if (!r.ok) { showStatus(d || 'Error linking device', false); return; }
+      showStatus(`Device linked!\n\nSubsonic username: ${subsonicUsername}\nPassword: ${d.password}\n\nSave this password — it will not be shown again.`, true);
+      if (jellyfinUserId) loadDevicesForUser(jellyfinUserId);
     }
 
-    async function loadDevices() {
-      const u = document.getElementById('listUsername').value;
-      const r = await fetch(`/Subsonic/api/devices?username=${encodeURIComponent(u)}`);
+    // ── Device list ───────────────────────────────────────────────────────────
+
+    async function loadDevicesForUser(jellyfinId) {
+      // Get all devices for any subsonic username tied to this jellyfin user id.
+      // We have to list all devices via the subsonic username — so we fetch
+      // by every subsonic username we know about.
+      // Simpler: use the jellyfin user's devices endpoint filtered by jellyfin id.
+      // For now, get all subsonic usernames from localStorage or ask the user.
+      // Best effort: fetch from the special jellyfinId endpoint if we add one,
+      // or just show a hint.
+      document.getElementById('devicesHint').textContent =
+        'Enter your Subsonic username below and click Load to see linked devices.';
+      document.getElementById('deviceList').innerHTML = `
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <input type="text" id="listUsername" placeholder="Subsonic username" style="width:auto;flex:1">
+          <button onclick="loadDevicesByUsername()">Load</button>
+        </div>
+        <div id="deviceItems"></div>`;
+    }
+
+    async function loadDevicesByUsername() {
+      const u = document.getElementById('listUsername').value.trim();
+      if (!u) return;
+      const r = await fetch(`/Subsonic/api/devices?username=${encodeURIComponent(u)}`, { headers: authHeader() });
       const devices = await r.json();
-      const el = document.getElementById('deviceList');
-      if (!devices.length) { el.innerHTML = '<p>No devices found.</p>'; return; }
+      const el = document.getElementById('deviceItems');
+      if (!Array.isArray(devices) || devices.length === 0) {
+        el.innerHTML = '<p style="color:#aaa;font-size:0.9rem">No devices found for that username.</p>';
+        return;
+      }
       el.innerHTML = devices.map(d => `
         <div class="device">
-          <span>${d.deviceLabel || '(no label)'} — linked ${d.createdAt}</span>
-          <button onclick="deleteDevice(${d.id}, '${u}')">Unlink</button>
-          <button onclick="resetPassword(${d.id}, '${u}')">Reset Password</button>
+          <span class="device-label">${escHtml(d.deviceLabel || '(no label)')} — <small style="color:#aaa">${escHtml(d.createdAt)}</small></span>
+          <button onclick="resetPassword(${d.id})">Reset Password</button>
+          <button class="danger" onclick="deleteDevice(${d.id}, '${escHtml(u)}')">Unlink</button>
         </div>`).join('');
     }
 
     async function deleteDevice(id, username) {
       if (!confirm('Unlink this device?')) return;
-      await fetch(`/Subsonic/api/devices/${id}`, { method: 'DELETE' });
-      loadDevices();
+      await fetch(`/Subsonic/api/devices/${id}`, { method: 'DELETE', headers: authHeader() });
+      loadDevicesByUsername();
     }
 
-    async function resetPassword(id, username) {
-      const r = await fetch(`/Subsonic/api/devices/${id}/reset-password`, { method: 'POST' });
+    async function resetPassword(id) {
+      const r = await fetch(`/Subsonic/api/devices/${id}/reset-password`, { method: 'POST', headers: authHeader() });
       const d = await r.json();
-      status(`New password: ${d.password} (save this now — it won't be shown again)`, true);
+      showStatus(`New password: ${d.password}\n\nSave this — it will not be shown again.`, true);
     }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    initSession();
   </script>
 </body>
 </html>
