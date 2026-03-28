@@ -27,6 +27,13 @@
     .device-meta  { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
     #deviceList { margin-top: 0.5rem; }
     #noDevices { color: #888; font-size: 0.875rem; margin: 0.5rem 0; }
+    .lib-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; font-size: 0.9rem; }
+    .share-row { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid #333; }
+    .share-row:last-child { border-bottom: none; }
+    .share-info { flex: 1; min-width: 0; font-size: 0.875rem; }
+    .share-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .share-meta { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
+    .share-url  { font-size: 0.78rem; color: #5ab0ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -49,10 +56,28 @@
     <div id="deviceList"><p id="noDevices" style="display:none">No devices linked yet.</p></div>
   </div>
 
+  <div class="card" id="sharesCard" style="display:none">
+    <h2 id="sharesTitle">Shares</h2>
+    <div id="sharesList"></div>
+  </div>
+
+  <div class="card" id="libraryCard" style="display:none">
+    <h2>Library Selection</h2>
+    <p style="font-size:0.875rem;color:#aaa;margin:0 0 0.75rem">
+      Choose which Jellyfin music libraries appear in Subsonic clients.
+      Deselect all to show all libraries.
+    </p>
+    <div id="libraryList"></div>
+    <div class="btn-row" style="margin-top:0.75rem">
+      <button id="saveLibBtn" onclick="saveLibraries()">Save</button>
+    </div>
+  </div>
+
   <script>
     // ── Jellyfin session ──────────────────────────────────────────────────────
 
     let token = null;
+    let currentUsername = null;
 
     function authHeaders() {
       return token ? { 'Authorization': `MediaBrowser Token="${token}"` } : {};
@@ -91,9 +116,12 @@
       }
 
       const me = await r.json();
+      currentUsername = me.name;
       document.getElementById('subtitle').textContent = `Logged in as ${me.name}`;
       document.getElementById('linkBtn').disabled = false;
       loadDevices();
+      loadLibraries();
+      loadShares(me);
     }
 
     // ── Banner ────────────────────────────────────────────────────────────────
@@ -129,6 +157,7 @@
       );
       document.getElementById('deviceLabel').value = '';
       loadDevices();
+      loadLibraries();
     }
 
     // ── Device list ───────────────────────────────────────────────────────────
@@ -175,6 +204,102 @@
       const d = await r.json();
       if (!r.ok) { showBanner('Reset failed (' + r.status + ')', false); return; }
       showBanner(`New password: ${d.password}\n\nUpdate your Subsonic client — this won't be shown again.`, true);
+    }
+
+    // ── Library selection ─────────────────────────────────────────────────────
+
+    let libraryFolders = [];
+
+    async function loadLibraries() {
+      if (!currentUsername) return;
+      const r = await fetch(`/Subsonic/api/libraries?username=${encodeURIComponent(currentUsername)}`, { headers: authHeaders() });
+      if (!r.ok) { document.getElementById('libraryCard').style.display = 'none'; return; }
+      const data = await r.json();
+      libraryFolders = data.folders;
+      const list = document.getElementById('libraryList');
+      list.innerHTML = data.folders.map(f => `
+        <div class="lib-row">
+          <input type="checkbox" id="lib-${escHtml(f.id)}" value="${escHtml(f.id)}"${data.selected.includes(f.id) ? ' checked' : ''}>
+          <label for="lib-${escHtml(f.id)}">${escHtml(f.name)}</label>
+        </div>`).join('');
+      document.getElementById('libraryCard').style.display = '';
+    }
+
+    async function saveLibraries() {
+      const selectedIds = libraryFolders
+        .filter(f => document.getElementById(`lib-${f.id}`)?.checked)
+        .map(f => f.id);
+      const r = await fetch('/Subsonic/api/libraries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ username: currentUsername, selectedIds }),
+      });
+      if (!r.ok) { showBanner('Failed to save library settings (' + r.status + ')', false); return; }
+      showBanner('Library selection saved.', true);
+    }
+
+    // ── Shares ────────────────────────────────────────────────────────────────
+
+    let isAdmin = false;
+
+    async function loadShares(me) {
+      // Detect admin by trying the admin endpoint
+      const adminR = await fetch('/Subsonic/api/admin/shares', { headers: authHeaders() });
+      if (adminR.ok) {
+        isAdmin = true;
+        const all = await adminR.json();
+        renderShares(all, true);
+        return;
+      }
+      // Fall back to own shares
+      const r = await fetch('/Subsonic/api/shares', { headers: authHeaders() });
+      if (!r.ok) return;
+      const shares = await r.json();
+      renderShares(shares, false);
+    }
+
+    function renderShares(shares, admin) {
+      const card = document.getElementById('sharesCard');
+      const title = document.getElementById('sharesTitle');
+      const list = document.getElementById('sharesList');
+      title.textContent = admin ? 'Shares (Admin)' : 'My Shares';
+      if (!shares.length) {
+        list.innerHTML = '<p style="font-size:0.875rem;color:#888;margin:0.5rem 0">No shares.</p>';
+        card.style.display = '';
+        return;
+      }
+      list.innerHTML = shares.map(s => {
+        const desc = s.description || '(no description)';
+        const created = s.created ? new Date(s.created).toLocaleDateString() : '—';
+        const expires = s.expires ? new Date(s.expires).toLocaleDateString() : 'never';
+        const meta = `${admin ? 'by ' + escHtml(s.username || '') + ' · ' : ''}created ${created} · expires ${expires} · ${s.visitCount ?? 0} visit${s.visitCount !== 1 ? 's' : ''}`;
+        const deleteEndpoint = admin ? `/Subsonic/api/admin/shares/${s.uid}` : `/Subsonic/api/shares/${s.uid}`;
+        return `<div class="share-row" id="share-${escHtml(s.uid)}">
+          <div class="share-info">
+            <div class="share-desc">${escHtml(desc)}</div>
+            <div class="share-meta">${meta}</div>
+            <div class="share-url" onclick="copyShareUrl('${escHtml(s.url)}')" title="Click to copy">${escHtml(s.url)}</div>
+          </div>
+          <div class="btn-row">
+            <button class="danger" onclick="deleteShare('${escHtml(s.uid)}','${escHtml(deleteEndpoint)}')">Delete</button>
+          </div>
+        </div>`;
+      }).join('');
+      card.style.display = '';
+    }
+
+    async function deleteShare(uid, endpoint) {
+      if (!confirm('Delete this share? Anyone with the link will lose access.')) return;
+      const r = await fetch(endpoint, { method: 'DELETE', headers: authHeaders() });
+      if (!r.ok) { showBanner('Delete failed (' + r.status + ')', false); return; }
+      document.getElementById(`share-${uid}`)?.remove();
+      const card = document.getElementById('sharesCard');
+      if (!card.querySelector('.share-row'))
+        document.getElementById('sharesList').innerHTML = '<p style="font-size:0.875rem;color:#888;margin:0.5rem 0">No shares.</p>';
+    }
+
+    function copyShareUrl(url) {
+      navigator.clipboard.writeText(url).then(() => showBanner('Share URL copied to clipboard.', true)).catch(() => {});
     }
 
     function escHtml(s) {

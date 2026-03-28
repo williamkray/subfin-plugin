@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
-using BCrypt.Net;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
@@ -94,7 +94,10 @@ public static class SubsonicStore
         while (reader.Read())
         {
             var device = ReadDevice(reader);
-            if (BCrypt.Net.BCrypt.Verify(password, device.AppPasswordHash))
+            bool match;
+            try { match = new PasswordHasher<object>().VerifyHashedPassword(null!, device.AppPasswordHash, password) != PasswordVerificationResult.Failed; }
+            catch (FormatException) { match = false; }
+            if (match)
                 return device;
         }
         return null;
@@ -139,7 +142,7 @@ public static class SubsonicStore
         string? deviceId,
         string? deviceName)
     {
-        var hash = BCrypt.Net.BCrypt.HashPassword(plainPassword, 10);
+        var hash = new PasswordHasher<object>().HashPassword(null!, plainPassword);
         var encrypted = Crypto.Encrypt(plainPassword, _salt);
 
         using var cmd = Db.CreateCommand();
@@ -170,7 +173,7 @@ public static class SubsonicStore
 
     public static void UpdateDevicePassword(long id, string newPassword)
     {
-        var hash = BCrypt.Net.BCrypt.HashPassword(newPassword, 10);
+        var hash = new PasswordHasher<object>().HashPassword(null!, newPassword);
         var encrypted = Crypto.Encrypt(newPassword, _salt);
         using var cmd = Db.CreateCommand();
         cmd.CommandText = "UPDATE linked_devices SET app_password_hash = @hash, app_password_encrypted = @enc WHERE id = @id";
@@ -401,6 +404,24 @@ public static class SubsonicStore
         cmd.CommandText = "UPDATE shares SET visit_count = visit_count + 1 WHERE share_uid = @uid";
         cmd.Parameters.AddWithValue("@uid", shareUid);
         cmd.ExecuteNonQuery();
+    }
+
+    public static List<(ShareRecord Share, string SubsonicUsername)> GetAllShares()
+    {
+        var list = new List<(ShareRecord, string)>();
+        using var cmd = Db.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.*, d.subsonic_username FROM shares s
+            JOIN linked_devices d ON d.id = s.linked_device_id
+            ORDER BY s.created_at DESC";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var share = ReadShare(reader);
+            var username = reader.GetString(reader.GetOrdinal("subsonic_username"));
+            list.Add((share, username));
+        }
+        return list;
     }
 
     public static string? GetShareSecret(string shareUid)

@@ -70,6 +70,26 @@ After `updateShare` completes, Tempus **ignores the response body** and re-fetch
 
 PR #199 fixed the bottom-sheet display of `expires`. The edit dialog crash (`setShareCalendar`) was a **separate remaining gap** — fixed on the subfin side by always including `expires`.
 
+## Streaming behavior (confirmed)
+
+Tempus calls `/rest/stream.view` through the Subsonic plugin for all playback — it does **not** have Jellyfin-native mode or call `/Audio/{id}/universal` directly.
+
+Retrofit signature:
+```java
+@GET("stream")
+Call<ApiResponse> stream(@QueryMap Map<String, String> params,
+                         @Query("id") String id,
+                         @Query("maxBitRate") Integer maxBitRate,
+                         @Query("format") String format)
+```
+
+- `format=opus` (not `ogg`) when user selects Opus
+- `maxBitRate=64` (or user-configured value), sent as `maxBitRate` (not `bitRate`)
+- Uses `f=json`
+- In "server priority" mode, neither `format` nor `maxBitRate` is sent — bare stream request with only `id` + auth
+
+If `UniversalAudioController` appears in Jellyfin logs without a preceding `[Subsonic] stream` log line, the plugin is running old code (version mismatch), not a Tempus bypass. Check `serverVersion` in ping response to confirm.
+
 ## Task contract
 
 When given a response shape or JSON sample:

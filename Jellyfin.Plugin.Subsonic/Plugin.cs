@@ -60,6 +60,13 @@ public class SubsonicPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
             {
                 Name = "Subsonic",
                 EmbeddedResourcePath = $"{GetType().Namespace}.Web.Views.index.html"
+            },
+            new PluginPageInfo
+            {
+                Name = "SubsonicAdmin",
+                DisplayName = "Subsonic",
+                EmbeddedResourcePath = $"{GetType().Namespace}.Web.Views.config.html",
+                EnableInMainMenu = true,
             }
         };
     }

@@ -81,9 +81,38 @@ public static class XmlBuilder
         w.WriteEndElement();
     }
 
-    // ── Ping / License ───────────────────────────────────────────────────────
+    // ── Ping / License / ScanStatus / User ──────────────────────────────────
 
     public static string Ping() => OkEnvelope(_ => { });
+
+    public static string ScanStatus() => OkEnvelope(w =>
+    {
+        w.WriteStartElement("scanStatus", Ns);
+        w.WriteAttributeString("scanning", "false");
+        w.WriteAttributeString("count", "0");
+        w.WriteEndElement();
+    });
+
+    public static string User(string username) => OkEnvelope(w =>
+    {
+        w.WriteStartElement("user", Ns);
+        w.WriteAttributeString("username", username);
+        w.WriteAttributeString("email", "");
+        w.WriteAttributeString("scrobblingEnabled", "false");
+        w.WriteAttributeString("adminRole", "false");
+        w.WriteAttributeString("settingsRole", "false");
+        w.WriteAttributeString("downloadRole", "true");
+        w.WriteAttributeString("uploadRole", "false");
+        w.WriteAttributeString("playlistRole", "true");
+        w.WriteAttributeString("coverArtRole", "false");
+        w.WriteAttributeString("commentRole", "false");
+        w.WriteAttributeString("podcastRole", "false");
+        w.WriteAttributeString("streamRole", "true");
+        w.WriteAttributeString("jukeboxRole", "false");
+        w.WriteAttributeString("shareRole", "false");
+        w.WriteAttributeString("videoConversionRole", "false");
+        w.WriteEndElement();
+    });
 
     public static string License() => OkEnvelope(w =>
     {
@@ -187,7 +216,7 @@ public static class XmlBuilder
                 foreach (var album in albums)
                 {
                     w.WriteStartElement("album", Ns);
-                    WriteAlbumShortAttrs(w, album);
+                    WriteAlbumID3Attrs(w, album);
                     w.WriteEndElement();
                 }
             }
@@ -254,7 +283,7 @@ public static class XmlBuilder
     {
         w.WriteStartElement("searchResult3", Ns);
         foreach (var a in artists) { w.WriteStartElement("artist", Ns); WriteAlbumShortAttrs(w, a); w.WriteEndElement(); }
-        foreach (var a in albums) { w.WriteStartElement("album", Ns); WriteAlbumShortAttrs(w, a); w.WriteEndElement(); }
+        foreach (var a in albums) { w.WriteStartElement("album", Ns); WriteAlbumID3Attrs(w, a); w.WriteEndElement(); }
         foreach (var s in songs) { w.WriteStartElement("song", Ns); WriteSongAttrs(w, s); w.WriteEndElement(); }
         w.WriteEndElement();
     });
@@ -264,7 +293,7 @@ public static class XmlBuilder
     public static string AlbumList(List<Dictionary<string, object?>> albums, bool list2 = false) => OkEnvelope(w =>
     {
         w.WriteStartElement(list2 ? "albumList2" : "albumList", Ns);
-        foreach (var album in albums) { w.WriteStartElement("album", Ns); WriteAlbumShortAttrs(w, album); w.WriteEndElement(); }
+        foreach (var album in albums) { w.WriteStartElement("album", Ns); if (list2) WriteAlbumID3Attrs(w, album); else WriteAlbumShortAttrs(w, album); w.WriteEndElement(); }
         w.WriteEndElement();
     });
 
@@ -285,6 +314,13 @@ public static class XmlBuilder
     public static string TopSongs(List<Dictionary<string, object?>> songs) => OkEnvelope(w =>
     {
         w.WriteStartElement("topSongs", Ns);
+        foreach (var s in songs) { w.WriteStartElement("song", Ns); WriteSongAttrs(w, s); w.WriteEndElement(); }
+        w.WriteEndElement();
+    });
+
+    public static string SimilarSongs(List<Dictionary<string, object?>> songs, bool v2 = false) => OkEnvelope(w =>
+    {
+        w.WriteStartElement(v2 ? "similarSongs2" : "similarSongs", Ns);
         foreach (var s in songs) { w.WriteStartElement("song", Ns); WriteSongAttrs(w, s); w.WriteEndElement(); }
         w.WriteEndElement();
     });
@@ -340,7 +376,7 @@ public static class XmlBuilder
     {
         w.WriteStartElement(v2 ? "starred2" : "starred", Ns);
         foreach (var a in artists) { w.WriteStartElement("artist", Ns); foreach (var kv in a) WriteAttr(w, kv.Key, kv.Value); w.WriteEndElement(); }
-        foreach (var a in albums) { w.WriteStartElement("album", Ns); WriteAlbumShortAttrs(w, a); w.WriteEndElement(); }
+        foreach (var a in albums) { w.WriteStartElement("album", Ns); if (v2) WriteAlbumID3Attrs(w, a); else WriteAlbumShortAttrs(w, a); w.WriteEndElement(); }
         foreach (var s in songs) { w.WriteStartElement("song", Ns); WriteSongAttrs(w, s); w.WriteEndElement(); }
         w.WriteEndElement();
     });
@@ -378,12 +414,23 @@ public static class XmlBuilder
 
     // ── ArtistInfo ───────────────────────────────────────────────────────────
 
-    public static string ArtistInfo(string? biography, string? musicBrainzId, string? lastFmUrl, List<Dictionary<string, object?>> similarArtists, bool v2 = false) => OkEnvelope(w =>
+    public static string ArtistInfo(string? biography, string? musicBrainzId, string? lastFmUrl, string? artistImageUrl, List<Dictionary<string, object?>> similarArtists, bool v2 = false) => OkEnvelope(w =>
     {
+        var imageUrl = artistImageUrl ?? "";
         w.WriteStartElement(v2 ? "artistInfo2" : "artistInfo", Ns);
-        if (!string.IsNullOrEmpty(biography)) { w.WriteStartElement("biography", Ns); w.WriteString(biography); w.WriteEndElement(); }
+        // Attributes first (required before any child elements per XmlWriter rules)
         if (!string.IsNullOrEmpty(musicBrainzId)) w.WriteAttributeString("musicBrainzId", musicBrainzId);
         if (!string.IsNullOrEmpty(lastFmUrl)) w.WriteAttributeString("lastFmUrl", lastFmUrl);
+        w.WriteAttributeString("smallImageUrl", imageUrl);
+        w.WriteAttributeString("mediumImageUrl", imageUrl);
+        w.WriteAttributeString("largeImageUrl", imageUrl);
+        // Text element children — DSub2000's ArtistInfoParser reads these as text elements, not attributes
+        if (!string.IsNullOrEmpty(biography)) { w.WriteStartElement("biography", Ns); w.WriteString(biography); w.WriteEndElement(); }
+        if (!string.IsNullOrEmpty(musicBrainzId)) { w.WriteStartElement("musicBrainzId", Ns); w.WriteString(musicBrainzId); w.WriteEndElement(); }
+        if (!string.IsNullOrEmpty(lastFmUrl)) { w.WriteStartElement("lastFmUrl", Ns); w.WriteString(lastFmUrl); w.WriteEndElement(); }
+        { w.WriteStartElement("smallImageUrl", Ns); w.WriteString(imageUrl); w.WriteEndElement(); }
+        { w.WriteStartElement("mediumImageUrl", Ns); w.WriteString(imageUrl); w.WriteEndElement(); }
+        { w.WriteStartElement("largeImageUrl", Ns); w.WriteString(imageUrl); w.WriteEndElement(); }
         foreach (var sa in similarArtists) { w.WriteStartElement("similarArtist", Ns); foreach (var kv in sa) WriteAttr(w, kv.Key, kv.Value); w.WriteEndElement(); }
         w.WriteEndElement();
     });
@@ -393,9 +440,9 @@ public static class XmlBuilder
     public static string AlbumInfo(string? notes, string? musicBrainzId, string? lastFmUrl, bool v2 = false) => OkEnvelope(w =>
     {
         w.WriteStartElement(v2 ? "albumInfo2" : "albumInfo", Ns);
-        if (!string.IsNullOrEmpty(notes)) { w.WriteStartElement("notes", Ns); w.WriteString(notes); w.WriteEndElement(); }
         if (!string.IsNullOrEmpty(musicBrainzId)) w.WriteAttributeString("musicBrainzId", musicBrainzId);
         if (!string.IsNullOrEmpty(lastFmUrl)) w.WriteAttributeString("lastFmUrl", lastFmUrl);
+        if (!string.IsNullOrEmpty(notes)) { w.WriteStartElement("notes", Ns); w.WriteString(notes); w.WriteEndElement(); }
         w.WriteEndElement();
     });
 
@@ -432,6 +479,17 @@ public static class XmlBuilder
     {
         foreach (var kv in album)
         {
+            if (kv.Value is List<Dictionary<string, object?>>) continue;
+            WriteAttr(w, kv.Key, kv.Value);
+        }
+    }
+
+    // AlbumID3 shape: no isDir (that's a Child field)
+    private static void WriteAlbumID3Attrs(XmlWriter w, Dictionary<string, object?> album)
+    {
+        foreach (var kv in album)
+        {
+            if (kv.Key == "isDir") continue;
             if (kv.Value is List<Dictionary<string, object?>>) continue;
             WriteAttr(w, kv.Key, kv.Value);
         }

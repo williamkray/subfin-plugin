@@ -1,10 +1,15 @@
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
 namespace Jellyfin.Plugin.Subsonic.Response;
 
 /// <summary>Subsonic API protocol version advertised to clients.</summary>
 public static class SubsonicConstants
 {
     public const string Version = "1.16.1";
-    public const string ServerVersion = "0.1.0";
+    public static string ServerVersion =>
+        SubsonicPlugin.Instance?.Version?.ToString() ?? "0.0.0";
     public const string ServerType = "subfin-plugin";
 }
 
@@ -25,9 +30,14 @@ public static class ErrorCode
 /// <summary>Builds JSON-serializable Subsonic envelope objects.</summary>
 public static class SubsonicEnvelope
 {
-    public static Dictionary<string, object> Ok(Dictionary<string, object>? payload = null)
+    /// <summary>
+    /// Returns a <see cref="JsonObject"/> whose keys are ordered: metadata first, payload last.
+    /// JsonObject preserves insertion order, which is critical for clients (e.g. Navic/subsonic-kotlin)
+    /// that use .entries.last() to locate the payload key.
+    /// </summary>
+    public static JsonObject Ok(Dictionary<string, object>? payload = null)
     {
-        var inner = new Dictionary<string, object>
+        var inner = new JsonObject
         {
             ["status"] = "ok",
             ["version"] = SubsonicConstants.Version,
@@ -37,20 +47,20 @@ public static class SubsonicEnvelope
         };
         if (payload != null)
             foreach (var kv in payload)
-                inner[kv.Key] = kv.Value;
+                inner[kv.Key] = kv.Value == null ? null : JsonSerializer.SerializeToNode(kv.Value);
 
-        return new Dictionary<string, object> { ["subsonic-response"] = inner };
+        return new JsonObject { ["subsonic-response"] = inner };
     }
 
-    public static Dictionary<string, object> Error(int code, string message)
+    public static JsonObject Error(int code, string message)
     {
-        return new Dictionary<string, object>
+        return new JsonObject
         {
-            ["subsonic-response"] = new Dictionary<string, object>
+            ["subsonic-response"] = new JsonObject
             {
                 ["status"] = "failed",
                 ["version"] = SubsonicConstants.Version,
-                ["error"] = new Dictionary<string, object>
+                ["error"] = new JsonObject
                 {
                     ["code"] = code,
                     ["message"] = message,

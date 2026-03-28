@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Subsonic Plugin Configuration</title>
+</head>
+<body>
+  <div data-role="page" class="page type-interior withSideMenu">
+    <div data-role="content">
+      <div class="content-primary">
+
+        <h2>Subsonic Plugin Settings</h2>
+
+        <form id="SubsonicConfigForm">
+          <div class="inputContainer">
+            <label class="inputLabel inputLabelUnfocused" for="lastFmApiKey">Last.fm API Key</label>
+            <input id="lastFmApiKey" is="emby-input" type="password" class="emby-input" autocomplete="off" placeholder="Enter new key to change" />
+            <div id="lastFmApiKeyStatus" class="fieldDescription"></div>
+            <div class="fieldDescription">Used for getArtistInfo/getAlbumInfo. Leave empty to keep existing key.</div>
+          </div>
+
+          <div class="checkboxContainer checkboxContainer-withDescription">
+            <label class="emby-checkbox-label">
+              <input id="logRestRequests" is="emby-checkbox" type="checkbox" class="emby-checkbox" />
+              <span>Log /rest/* requests</span>
+            </label>
+            <div class="fieldDescription checkboxFieldDescription">Log all incoming Subsonic REST requests.</div>
+          </div>
+
+          <div>
+            <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+              <span>Save</span>
+            </button>
+          </div>
+        </form>
+
+        <script type="text/javascript">
+          var pluginId = '4a3b2c1d-e5f6-7890-abcd-ef1234567890';
+
+          document.addEventListener('pagebeforeshow', function () {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+              document.getElementById('lastFmApiKeyStatus').textContent = config.LastFmApiKey ? 'API key is configured.' : 'No API key saved.';
+              document.getElementById('logRestRequests').checked = !!config.LogRestRequests;
+              Dashboard.hideLoadingMsg();
+            });
+
+            document.getElementById('SubsonicConfigForm').addEventListener('submit', function (e) {
+              e.preventDefault();
+              Dashboard.showLoadingMsg();
+              ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                var newKey = document.getElementById('lastFmApiKey').value;
+                if (newKey) config.LastFmApiKey = newKey;
+                config.LogRestRequests = document.getElementById('logRestRequests').checked;
+                ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                  Dashboard.processPluginConfigurationUpdateResult(result);
+                });
+              });
+            });
+          });
+        </script>
+
+      </div>
+    </div>
+  </div>
+</body>
+</html>

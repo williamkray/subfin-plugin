@@ -1,65 +1,58 @@
 #!/usr/bin/env bash
-# Deploy subfin-plugin to localenv Jellyfin for development.
+# Deploy subfin-plugin to localenv Jellyfin via the published package.
+# Workflow: publish → download ZIP → replace plugin dir → restart → verify.
 # Usage: ./scripts/deploy-dev.sh
-# Assumes localenv Jellyfin is at ../subfin/localenv (relative to repo root).
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCALENV="$REPO_ROOT/../subfin/localenv"
-PLUGIN_DIR="$LOCALENV/jellyfin-data/config/plugins/Subsonic_0.1.0.0"
 META_SRC="$REPO_ROOT/meta.json"
+BASE_URL="https://home.kray.pw"
 
-# 1. Publish (gets all dependencies including third-party ones)
-echo "[deploy] Publishing Release..."
-dotnet publish -c Release "$REPO_ROOT/Jellyfin.Plugin.Subsonic" --nologo -v quiet
-
-PUBLISH="$REPO_ROOT/Jellyfin.Plugin.Subsonic/bin/Release/net9.0/publish"
-
-# 2. Copy plugin DLL + third-party deps not provided by Jellyfin at runtime.
-#    Jellyfin ships: Microsoft.Data.Sqlite, SQLitePCLRaw.*, EF Core, ASP.NET Core.
-#    We need to bundle: BCrypt.Net-Next (and any future deps we add).
-echo "[deploy] Copying DLL and bundled deps to $PLUGIN_DIR"
-mkdir -p "$PLUGIN_DIR"
-cp "$PUBLISH/Jellyfin.Plugin.Subsonic.dll" "$PLUGIN_DIR/"
-cp "$PUBLISH/BCrypt.Net-Next.dll" "$PLUGIN_DIR/"
-
-# 3. Write meta.json — always restore to known-good state.
-# Jellyfin overwrites meta.json with status=NotSupported/assemblies=[] on load failure;
-# this script always resets it so the plugin isn't silently skipped.
 VERSION=$(jq -r '.version' "$META_SRC")
-GUID=$(jq -r '.guid' "$META_SRC")
-cat > "$PLUGIN_DIR/meta.json" << EOF
-{
-  "category": "Music",
-  "changelog": "$(jq -r '.changelog' "$META_SRC")",
-  "description": "$(jq -r '.description' "$META_SRC")",
-  "guid": "$GUID",
-  "name": "Subsonic",
-  "overview": "$(jq -r '.overview' "$META_SRC")",
-  "owner": "subfin",
-  "targetAbi": "$(jq -r '.targetAbi' "$META_SRC")",
-  "timestamp": "$(jq -r '.timestamp' "$META_SRC")",
-  "version": "$VERSION",
-  "status": "Active",
-  "autoUpdate": false,
-  "assemblies": [
-    "Jellyfin.Plugin.Subsonic.dll",
-    "BCrypt.Net-Next.dll"
-  ]
-}
-EOF
+ZIP_NAME="jellyfin-plugin-subsonic_${VERSION}.zip"
+# Jellyfin plugin dirs use 4-part versions: Major.Minor.Patch.Build
+PLUGIN_DIR="$LOCALENV/jellyfin-data/config/plugins/Subsonic_${VERSION}.0"
 
-# 4. Restart Jellyfin
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+# 1. Publish to home.kray.pw
+echo "[deploy] Publishing v${VERSION}..."
+"$REPO_ROOT/scripts/publish.sh"
+
+# 2. Download the published ZIP (validates the artifact is actually reachable)
+echo "[deploy] Downloading $BASE_URL/$ZIP_NAME..."
+curl -fsSL "$BASE_URL/$ZIP_NAME" -o "$WORK_DIR/$ZIP_NAME"
+
+# 3. Remove stale version dirs to avoid Jellyfin loading multiple versions
+for stale in "$LOCALENV/jellyfin-data/config/plugins/Subsonic_"*/; do
+    [ -d "$stale" ] && [ "${stale%/}" != "$PLUGIN_DIR" ] && rm -rf "$stale" && echo "[deploy] Removed stale dir: $stale"
+done
+
+# 4. Extract ZIP into plugin dir (meta.json and DLL come from the artifact)
+echo "[deploy] Installing to $PLUGIN_DIR..."
+rm -rf "$PLUGIN_DIR"
+mkdir -p "$PLUGIN_DIR"
+unzip -q "$WORK_DIR/$ZIP_NAME" -d "$PLUGIN_DIR"
+
+# 5. Restart Jellyfin
 echo "[deploy] Restarting Jellyfin..."
 cd "$LOCALENV"
 docker compose restart jellyfin
 
-# 5. Wait and verify — check only logs from the last 30 seconds to avoid stale history
+# 6. Clear derived_cache so post-deploy testing isn't masked by stale artist index data
+DB="$LOCALENV/jellyfin-data/config/data/SubsonicPlugin/subsonic.db"
+if [ -f "$DB" ]; then
+    sqlite3 "$DB" "DELETE FROM derived_cache;" 2>/dev/null && echo "[deploy] Cleared derived_cache"
+fi
+
+# 7. Wait and verify — check only logs from the last 30 seconds to avoid stale history
 sleep 8
 RECENT=$(docker logs --since 30s jellyfin 2>&1)
 if echo "$RECENT" | grep -q "Loaded plugin: Subsonic"; then
-    echo "[deploy] OK — plugin loaded"
+    echo "[deploy] OK — plugin loaded v${VERSION}"
     echo "[deploy] Smoke test:"
     curl -s "http://localhost:8096/rest/ping.view?u=x&p=x&v=1.16.1&c=deploy-check"
     echo

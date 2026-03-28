@@ -16,6 +16,18 @@ public static class ItemMapper
     public static int TicksToSeconds(long? ticks) =>
         ticks.HasValue ? (int)(ticks.Value / TicksPerSecond) : 0;
 
+    public static string AudioMimeType(string? container) => container?.ToLowerInvariant() switch
+    {
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" or "oga" => "audio/ogg",
+        "opus" => "audio/ogg; codecs=opus",
+        "aac" or "m4a" => "audio/aac",
+        "wav" => "audio/wav",
+        "wma" => "audio/x-ms-wma",
+        _ => "application/octet-stream",
+    };
+
     public static string IndexLetter(string? name)
     {
         if (string.IsNullOrWhiteSpace(name)) return "#";
@@ -42,40 +54,42 @@ public static class ItemMapper
     public static Dictionary<string, object?> ToArtistWithAlbums(MusicArtist artist, IEnumerable<MusicAlbum> albums)
     {
         var albumList = albums.ToList();
+        var artistId = $"ar-{artist.Id:N}";
         return new()
         {
             ["id"] = artist.Id.ToString("N"),
             ["name"] = artist.Name ?? "",
             ["coverArt"] = $"ar-{artist.Id:N}",
             ["albumCount"] = albumList.Count,
-            ["album"] = albumList.Select(ToAlbumShort).ToList(),
+            ["album"] = albumList.Select(a => ToAlbumShort(a, artistId)).ToList(),
         };
     }
 
     // ── Album ────────────────────────────────────────────────────────────────
 
-    public static Dictionary<string, object?> ToAlbumShort(MusicAlbum album)
+    public static Dictionary<string, object?> ToAlbumShort(MusicAlbum album, string? resolvedArtistId = null)
     {
-        // MusicArtist navigation property gives us the artist's Guid
-        var artistId = album.MusicArtist?.Id;
         var artistName = album.AlbumArtist ?? album.AlbumArtists.FirstOrDefault() ?? "";
         return new()
         {
             ["id"] = album.Id.ToString("N"),
             ["name"] = album.Name ?? "",
+            ["isDir"] = true,
             ["coverArt"] = $"al-{album.Id:N}",
             ["songCount"] = album.Tracks.Count(),
+            ["duration"] = TicksToSeconds(album.RunTimeTicks),
+            ["playCount"] = 0,
             ["artist"] = artistName,
-            ["artistId"] = artistId.HasValue ? $"ar-{artistId.Value:N}" : null,
+            ["artistId"] = resolvedArtistId ?? "",
             ["year"] = album.ProductionYear,
+            ["genre"] = album.Genres.FirstOrDefault() ?? "",
             ["created"] = (album.DateCreated == default ? DateTimeOffset.UnixEpoch.UtcDateTime : album.DateCreated).ToString("o"),
         };
     }
 
-    public static Dictionary<string, object?> ToAlbum(MusicAlbum album, IEnumerable<Audio> songs)
+    public static Dictionary<string, object?> ToAlbum(MusicAlbum album, IEnumerable<Audio> songs, string? resolvedArtistId = null)
     {
         var songList = songs.ToList();
-        var artistId = album.MusicArtist?.Id;
         var artistName = album.AlbumArtist ?? album.AlbumArtists.FirstOrDefault() ?? "";
         return new()
         {
@@ -90,17 +104,17 @@ public static class ItemMapper
             ["created"] = (album.DateCreated == default ? DateTimeOffset.UnixEpoch.UtcDateTime : album.DateCreated).ToString("o"),
             ["duration"] = songList.Sum(s => TicksToSeconds(s.RunTimeTicks)),
             ["playCount"] = 0,
-            ["artistId"] = artistId.HasValue ? $"ar-{artistId.Value:N}" : null,
+            ["artistId"] = resolvedArtistId ?? "",
             ["artist"] = artistName,
             ["year"] = album.ProductionYear,
-            ["genre"] = album.Genres.FirstOrDefault(),
-            ["song"] = songList.Select(s => ToSong(s, album.Id.ToString("N"), album.Name, artistName)).ToList(),
+            ["genre"] = album.Genres.FirstOrDefault() ?? "",
+            ["song"] = songList.Select(s => ToSong(s, album.Id.ToString("N"), album.Name, artistName, resolvedArtistId)).ToList(),
         };
     }
 
     // ── Song ─────────────────────────────────────────────────────────────────
 
-    public static Dictionary<string, object?> ToSong(Audio song, string? albumId = null, string? albumName = null, string? artistName = null)
+    public static Dictionary<string, object?> ToSong(Audio song, string? albumId = null, string? albumName = null, string? artistName = null, string? artistId = null)
     {
         var duration = TicksToSeconds(song.RunTimeTicks);
         var size = song.Size ?? 0L;
@@ -114,6 +128,8 @@ public static class ItemMapper
         var mediaStream = song.GetMediaStreams()
             .FirstOrDefault(s => s.Type == MediaBrowser.Model.Entities.MediaStreamType.Audio);
 
+        var suffix = song.Container?.ToLowerInvariant() ?? "mp3";
+        var mimeType = AudioMimeType(song.Container);
         return new()
         {
             ["id"] = song.Id.ToString("N"),
@@ -122,23 +138,24 @@ public static class ItemMapper
             ["isDir"] = false,
             ["isVideo"] = false,
             ["type"] = "music",
-            ["mediaType"] = "audio",
+            ["mediaType"] = "song",
             ["albumId"] = $"al-{effectiveAlbumId}",
             ["album"] = albumName ?? song.Album ?? "",
             ["artist"] = primaryArtist,
+            ["artistId"] = artistId ?? "",
             ["displayArtist"] = primaryArtist,
             ["displayAlbumArtist"] = primaryArtist,
-            ["coverArt"] = song.Id.ToString("N"),
+            ["coverArt"] = $"al-{effectiveAlbumId}",
             ["duration"] = duration,
             ["bitRate"] = bitRate,
             ["track"] = song.IndexNumber ?? 0,
             ["year"] = song.ProductionYear,
-            ["genre"] = song.Genres.FirstOrDefault(),
+            ["genre"] = song.Genres.FirstOrDefault() ?? "",
             ["size"] = size,
-            ["suffix"] = "mp3",
-            ["contentType"] = "audio/mpeg",
-            ["transcodedSuffix"] = "mp3",
-            ["transcodedContentType"] = "audio/mpeg",
+            ["suffix"] = suffix,
+            ["contentType"] = mimeType,
+            ["transcodedSuffix"] = suffix,
+            ["transcodedContentType"] = mimeType,
             ["discNumber"] = song.ParentIndexNumber ?? 1,
             ["path"] = song.Path ?? "",
             ["bitDepth"] = mediaStream?.BitDepth ?? 16,

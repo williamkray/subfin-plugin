@@ -9,7 +9,10 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Plugin.Subsonic.Mappers;
 using Jellyfin.Plugin.Subsonic.Store;
+using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -65,9 +68,24 @@ public class WebController : ControllerBase
 
         SubsonicStore.IncrementShareVisitCount(uid);
 
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        var tracks = share.EntryIdsFlat.Select(id =>
+        {
+            if (!Guid.TryParse(id, out var guid)) return null;
+            var audio = _library.GetItemById<Audio>(guid);
+            if (audio == null) return null;
+            var duration = ItemMapper.TicksToSeconds(audio.RunTimeTicks);
+            var artist = audio.AlbumArtists.FirstOrDefault() ?? audio.Artists.FirstOrDefault() ?? "";
+            var streamUrl = $"{baseUrl}/rest/stream.view?id={guid:N}&u=share_{uid}&p={Uri.EscapeDataString(secret)}&v=1.16.1&c=subfin-share";
+            return new { title = audio.Name ?? "", artist, album = audio.Album ?? "", duration, streamUrl };
+        }).Where(t => t != null).ToList();
+        var tracksJson = JsonSerializer.Serialize(tracks);
+
         var html = GetEmbeddedHtml("share.html")
             .Replace("{{SHARE_UID}}", uid)
-            .Replace("{{SECRET}}", System.Net.WebUtility.HtmlEncode(secret));
+            .Replace("{{SECRET}}", System.Net.WebUtility.HtmlEncode(secret))
+            .Replace("{{TRACKS_JSON}}", tracksJson)
+            .Replace("{{DESCRIPTION}}", System.Net.WebUtility.HtmlEncode(share.Description ?? "Shared Music"));
         return Content(html, "text/html; charset=utf-8");
     }
 
@@ -175,31 +193,147 @@ public class WebController : ControllerBase
         return Ok(new { deviceId, password });
     }
 
+    // ── API: user share management ───────────────────────────────────────────
+
+    [HttpGet("api/shares")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult GetMyShares()
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        return Ok(shares.Select(s => {
+            var secret = SubsonicStore.GetShareSecret(s.ShareUid) ?? "";
+            return new {
+                uid = s.ShareUid,
+                description = s.Description,
+                created = s.CreatedAt,
+                expires = s.ExpiresAt,
+                visitCount = s.VisitCount,
+                url = $"{baseUrl}/Subsonic/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}",
+            };
+        }));
+    }
+
+    [HttpDelete("api/shares/{uid}")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult DeleteMyShare(string uid)
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        var share = SubsonicStore.GetShare(uid);
+        if (share == null) return NotFound();
+        // Verify this share belongs to the current user
+        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        if (!shares.Any(s => s.ShareUid == uid)) return Forbid();
+        SubsonicStore.DeleteShare(uid);
+        return Ok();
+    }
+
+    // ── API: admin share management ──────────────────────────────────────────
+
+    [HttpGet("api/admin/shares")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult GetAllSharesAdmin()
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!user.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value)) return Forbid();
+        var shares = SubsonicStore.GetAllShares();
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        return Ok(shares.Select(t => {
+            var secret = SubsonicStore.GetShareSecret(t.Share.ShareUid) ?? "";
+            return new {
+                uid = t.Share.ShareUid, username = t.SubsonicUsername,
+                description = t.Share.Description,
+                created = t.Share.CreatedAt, expires = t.Share.ExpiresAt,
+                visitCount = t.Share.VisitCount,
+                url = $"{baseUrl}/Subsonic/share/{t.Share.ShareUid}?secret={Uri.EscapeDataString(secret)}",
+            };
+        }));
+    }
+
+    [HttpDelete("api/admin/shares/{uid}")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult AdminDeleteShare(string uid)
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!user.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value)) return Forbid();
+        SubsonicStore.DeleteShare(uid);
+        return Ok();
+    }
+
+    // ── Share: M3U download ──────────────────────────────────────────────────
+
+    [HttpGet("share/{uid}/m3u")]
+    public IActionResult ShareM3u(string uid)
+    {
+        var secret = Request.Query["secret"].ToString();
+        var share = SubsonicStore.GetShare(uid);
+        if (share == null) return NotFound("Share not found.");
+
+        var storedSecret = SubsonicStore.GetShareSecret(uid);
+        if (storedSecret != secret) return Unauthorized("Invalid share link.");
+
+        if (!string.IsNullOrEmpty(share.ExpiresAt) && DateTimeOffset.Parse(share.ExpiresAt) < DateTimeOffset.UtcNow)
+            return BadRequest("This share has expired.");
+
+        SubsonicStore.IncrementShareVisitCount(uid);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("#EXTM3U");
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        foreach (var id in share.EntryIdsFlat)
+        {
+            if (!Guid.TryParse(id, out var guid)) continue;
+            var audio = _library.GetItemById<Audio>(guid);
+            if (audio == null) continue;
+            var duration = ItemMapper.TicksToSeconds(audio.RunTimeTicks);
+            var artist = audio.AlbumArtists.FirstOrDefault() ?? "";
+            var title = audio.Name ?? "";
+            sb.AppendLine($"#EXTINF:{duration},{artist} - {title}");
+            sb.AppendLine($"{baseUrl}/rest/stream.view?id={guid:N}&u=share_{uid}&p={Uri.EscapeDataString(secret)}&v=1.16.1&c=subfin-share");
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+        return File(bytes, "audio/x-mpegurl", $"share-{uid}.m3u8");
+    }
+
     // ── API: library selection ───────────────────────────────────────────────
 
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     [HttpGet("api/libraries")]
     public IActionResult GetLibraries([FromQuery] string username)
     {
         if (string.IsNullOrEmpty(username)) return BadRequest("username required");
+        var (currentUser, err) = ResolveUser();
+        if (err != null) return err;
 
         var devices = SubsonicStore.GetDevicesForUser(username);
         if (devices.Count == 0) return BadRequest("No linked devices for this username.");
-
-        var user = _userManager.GetUserById(Guid.Parse(devices[0].JellyfinUserId));
-        if (user == null) return NotFound("Jellyfin user not found.");
+        if (devices[0].JellyfinUserId != currentUser!.Id.ToString("N")) return Forbid();
 
         var allFolders = _library.GetVirtualFolders()
             .Where(f => f.CollectionType == MediaBrowser.Model.Entities.CollectionTypeOptions.music)
             .Select(f => new { id = f.ItemId, name = f.Name ?? "" });
-        var folders = allFolders;
         var selected = SubsonicStore.GetUserLibrarySettings(username);
-        return Ok(new { folders, selected });
+        return Ok(new { folders = allFolders, selected });
     }
 
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     [HttpPost("api/libraries")]
     public IActionResult SetLibraries([FromBody] SetLibrariesRequest req)
     {
         if (string.IsNullOrEmpty(req.Username)) return BadRequest("username required");
+        var (currentUser, err) = ResolveUser();
+        if (err != null) return err;
+
+        var devices = SubsonicStore.GetDevicesForUser(req.Username);
+        if (devices.Count == 0) return BadRequest("No linked devices for this username.");
+        if (devices[0].JellyfinUserId != currentUser!.Id.ToString("N")) return Forbid();
+
         SubsonicStore.SetUserLibrarySettings(req.Username, req.SelectedIds ?? []);
         return Ok();
     }

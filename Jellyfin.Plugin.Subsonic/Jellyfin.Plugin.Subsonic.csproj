@@ -3,8 +3,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <AssemblyName>Jellyfin.Plugin.Subsonic</AssemblyName>
     <RootNamespace>Jellyfin.Plugin.Subsonic</RootNamespace>
-    <AssemblyVersion>0.1.0</AssemblyVersion>
-    <FileVersion>0.1.0</FileVersion>
+    <AssemblyVersion>0.2.2.1</AssemblyVersion>
+    <FileVersion>0.2.2.1</FileVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Optimize>true</Optimize>
@@ -24,8 +24,6 @@
     <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.6" />
     <!-- SQLite -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
-    <!-- BCrypt for app password hashing -->
-    <PackageReference Include="BCrypt.Net-Next" Version="4.*" />
   </ItemGroup>
 
   <ItemGroup>
