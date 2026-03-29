@@ -139,7 +139,7 @@ public static class ItemMapper
             ["isVideo"] = false,
             ["type"] = "music",
             ["mediaType"] = "song",
-            ["albumId"] = $"al-{effectiveAlbumId}",
+            ["albumId"] = effectiveAlbumId,
             ["album"] = albumName ?? song.Album ?? "",
             ["artist"] = primaryArtist,
             ["artistId"] = artistId ?? "",

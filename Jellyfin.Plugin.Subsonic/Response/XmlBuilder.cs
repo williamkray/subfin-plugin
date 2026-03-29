@@ -52,6 +52,13 @@ public static class XmlBuilder
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    // Strips characters that are illegal in XML 1.0 attribute values (control chars except tab/LF/CR).
+    // Music file tags sometimes contain these characters and will cause XmlWriter to throw.
+    private static string SanitizeXmlString(string s) =>
+        string.IsNullOrEmpty(s) ? s :
+        new string(s.Where(c => c == '\t' || c == '\n' || c == '\r'
+                              || (c >= '\x20' && c != '\uFFFE' && c != '\uFFFF')).ToArray());
+
     public static void WriteAttr(XmlWriter w, string name, object? value)
     {
         if (value == null) return;
@@ -61,7 +68,7 @@ public static class XmlBuilder
             int i => i.ToString(CultureInfo.InvariantCulture),
             long l => l.ToString(CultureInfo.InvariantCulture),
             double d => d.ToString(CultureInfo.InvariantCulture),
-            _ => value.ToString() ?? ""
+            _ => SanitizeXmlString(value.ToString() ?? "")
         });
     }
 
