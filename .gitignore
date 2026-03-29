@@ -6,3 +6,6 @@ localenv/
 *.db
 *.db-wal
 *.db-shm
+.claude/
+issues/
+localenv

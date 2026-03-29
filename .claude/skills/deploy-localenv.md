@@ -54,11 +54,11 @@ After changes to `index.html`, `share.html`, or `config.html`, verify the pages 
 
 ```bash
 # index.html — must return HTML, not a redirect or error
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8096/Subsonic/
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8096/subfin/
 
 # share page (requires a valid share uid + secret from the DB)
 # config page is served by Jellyfin at:
-#   http://localhost:8096/web/index.html#!/configurationpage?name=SubsonicAdmin
+#   http://localhost:8096/web/index.html#!/configurationpage?name=SubfinAdmin
 ```
 
 If `index.html` shows a broken layout or scripts don't run, check that the HTML still has the correct `localStorage` token read pattern — see CLAUDE.md §Web UI auth pattern.
@@ -92,7 +92,7 @@ When adding code that proxies to a Jellyfin internal endpoint (`/Audio/*`, `/Ite
 
 1. **Probe the endpoint first** — use `curl` directly against localenv with the API key to verify behavior before implementing:
    ```bash
-   APIKEY=$(sqlite3 ../subfin/localenv/jellyfin-data/config/data/SubsonicPlugin/subsonic.db \
+   APIKEY=$(sqlite3 ../subfin/localenv/jellyfin-data/config/data/SubfinPlugin/subsonic.db \
      "SELECT value_json FROM derived_cache WHERE cache_key='plugin-api-key'")
    curl -v -H "Authorization: MediaBrowser Token=\"$APIKEY\"" \
      "http://localhost:8096/Audio/{id}/stream.webm?audioCodec=opus&static=false&audioBitRate=64000&userId=..."
@@ -100,7 +100,7 @@ When adding code that proxies to a Jellyfin internal endpoint (`/Audio/*`, `/Ite
 2. **Check redirects** — use `--max-redirs 0` to detect if Jellyfin redirects the URL elsewhere
 3. **Add diagnostic logging from the start** — log the proxy URL and response status so prod issues are diagnosable without another deploy cycle:
    ```csharp
-   _logger.LogInformation("[Subsonic] stream proxy → {Url}", url);
+   _logger.LogInformation("[Subfin] stream proxy → {Url}", url);
    ```
 
 **Known Jellyfin API pitfall:** `/Audio/{id}/universal?container=webm&audioCodec=opus` silently ignores `transcodingContainer` and builds an invalid `mp3+opus` transcoding profile. Use `/Audio/{id}/stream.{container}` (container in path) instead — it takes the output format literally and produces a valid ffmpeg command.

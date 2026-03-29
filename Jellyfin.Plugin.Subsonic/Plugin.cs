@@ -32,25 +32,31 @@ public class SubsonicPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             Configuration.Salt = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
             SaveConfiguration();
-            _logger.LogInformation("[Subsonic] Generated new encryption salt");
+            _logger.LogInformation("[Subfin] Generated new encryption salt");
         }
 
-        // Initialize SQLite store.
-        var dataDir = Path.Combine(applicationPaths.DataPath, "SubsonicPlugin");
+        // Initialize SQLite store — migrate data dir from SubsonicPlugin → SubfinPlugin if needed.
+        var oldDataDir = Path.Combine(applicationPaths.DataPath, "SubsonicPlugin");
+        var dataDir = Path.Combine(applicationPaths.DataPath, "SubfinPlugin");
+        if (Directory.Exists(oldDataDir) && !Directory.Exists(dataDir))
+        {
+            Directory.Move(oldDataDir, dataDir);
+            _logger.LogInformation("[Subfin] Migrated data dir SubsonicPlugin → SubfinPlugin");
+        }
         Directory.CreateDirectory(dataDir);
         SubsonicStore.Initialize(Path.Combine(dataDir, "subsonic.db"), Configuration.Salt);
 
-        _logger.LogInformation("[Subsonic] Plugin loaded, DB at {DataDir}", dataDir);
+        _logger.LogInformation("[Subfin] Plugin loaded, DB at {DataDir}", dataDir);
     }
 
     public static SubsonicPlugin? Instance { get; private set; }
 
-    public override string Name => "Subsonic";
+    public override string Name => "Subfin";
 
     public override Guid Id => Guid.Parse("4a3b2c1d-e5f6-7890-abcd-ef1234567890");
 
     public override string Description =>
-        "OpenSubsonic REST API compatibility layer for Subsonic/Navidrome clients.";
+        "OpenSubsonic REST API compatibility layer — use Subsonic/Navidrome clients with Jellyfin.";
 
     public IEnumerable<PluginPageInfo> GetPages()
     {
@@ -58,13 +64,13 @@ public class SubsonicPlugin : BasePlugin<PluginConfiguration>, IHasWebPages
         {
             new PluginPageInfo
             {
-                Name = "Subsonic",
+                Name = "Subfin",
                 EmbeddedResourcePath = $"{GetType().Namespace}.Web.Views.index.html"
             },
             new PluginPageInfo
             {
-                Name = "SubsonicAdmin",
-                DisplayName = "Subsonic",
+                Name = "SubfinAdmin",
+                DisplayName = "Subfin",
                 EmbeddedResourcePath = $"{GetType().Namespace}.Web.Views.config.html",
                 EnableInMainMenu = true,
             }

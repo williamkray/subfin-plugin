@@ -48,7 +48,7 @@ function decrypt(blob) {
   return dec.update(ct).toString("utf8") + dec.final("utf8");
 }
 
-const dbPath = resolve(jellyfinDataDir, "data/SubsonicPlugin/subsonic.db");
+const dbPath = resolve(jellyfinDataDir, "data/SubfinPlugin/subsonic.db");
 const db = new Database(dbPath, { readonly: true });
 
 const devices = db.prepare(

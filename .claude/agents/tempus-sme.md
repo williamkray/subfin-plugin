@@ -88,7 +88,7 @@ Call<ApiResponse> stream(@QueryMap Map<String, String> params,
 - Uses `f=json`
 - In "server priority" mode, neither `format` nor `maxBitRate` is sent — bare stream request with only `id` + auth
 
-If `UniversalAudioController` appears in Jellyfin logs without a preceding `[Subsonic] stream` log line, the plugin is running old code (version mismatch), not a Tempus bypass. Check `serverVersion` in ping response to confirm.
+If `UniversalAudioController` appears in Jellyfin logs without a preceding `[Subfin] stream` log line, the plugin is running old code (version mismatch), not a Tempus bypass. Check `serverVersion` in ping response to confirm.
 
 ## Task contract
 

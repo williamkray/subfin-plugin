@@ -88,7 +88,7 @@ public class SubsonicController : ControllerBase
 
         var config = SubsonicPlugin.Instance?.Configuration;
         if (config?.LogRestRequests == true)
-            _logger.LogInformation("[Subsonic] {Method} {Format}", method, format);
+            _logger.LogInformation("[Subfin] {Method} {Format}", method, format);
 
         var m = method.ToLowerInvariant().TrimEnd();
 
@@ -112,7 +112,7 @@ public class SubsonicController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[Subsonic] Error handling {Method}", method);
+            _logger.LogError(ex, "[Subfin] Error handling {Method}", method);
             return Respond(format, SubsonicEnvelope.Error(ErrorCode.Generic, "Internal server error."), XmlBuilder.ErrorEnvelope(ErrorCode.Generic, "Internal server error."));
         }
     }
@@ -162,6 +162,9 @@ public class SubsonicController : ControllerBase
             "getnowplaying" => GetNowPlaying(format),
             "saveplayqueue" => SavePlayQueue(auth, p, format),
             "getplayqueue" => GetPlayQueue(auth, format),
+            "getshares" or "createshare" or "updateshare" or "deleteshare"
+                when SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false
+                => ErrorResponse(format, ErrorCode.Generic, "Sharing is disabled."),
             "getshares" => GetShares(auth, user, format),
             "createshare" => CreateShare(auth, user, p, format),
             "updateshare" => UpdateShare(p, format),
@@ -366,9 +369,9 @@ public class SubsonicController : ControllerBase
         ApplyFolderScoping(query, folderIds);
 
         var albums = _library.GetItemList(query).OfType<MusicAlbum>().ToList();
-        _logger.LogInformation("[Subsonic] getArtist {Name} (guid={Guid}): {Count} albums", artist.Name, guid, albums.Count);
+        _logger.LogInformation("[Subfin] getArtist {Name} (guid={Guid}): {Count} albums", artist.Name, guid, albums.Count);
 
-        // Fallback: if no albums found, re-resolve via GetArtist(name) — the guid we received
+        // Fallback 1: if no albums found, re-resolve via GetArtist(name) — the guid we received
         // may be a folder/hierarchy entity (whose ID doesn't work with AlbumArtistIds) rather than
         // the tag/index entity. GetArtist(name) returns the tag entity.
         if (albums.Count == 0 && !string.IsNullOrEmpty(artist.Name))
@@ -376,7 +379,7 @@ public class SubsonicController : ControllerBase
             var tagEntity = _library.GetArtist(artist.Name);
             if (tagEntity != null && tagEntity.Id != guid)
             {
-                _logger.LogInformation("[Subsonic] getArtist fallback: tag entity {TagId} differs from passed {Guid}, retrying", tagEntity.Id, guid);
+                _logger.LogInformation("[Subfin] getArtist fallback: tag entity {TagId} differs from passed {Guid}, retrying", tagEntity.Id, guid);
                 var fallbackQuery = new InternalItemsQuery(user)
                 {
                     IncludeItemTypes = [BaseItemKind.MusicAlbum],
@@ -386,6 +389,25 @@ public class SubsonicController : ControllerBase
                 ApplyFolderScoping(fallbackQuery, folderIds);
                 albums = _library.GetItemList(fallbackQuery).OfType<MusicAlbum>().ToList();
             }
+        }
+
+        // Fallback 2: artists with special characters (e.g. *NSYNC, AC/DC) may still return 0
+        // albums because Jellyfin's AlbumArtistIds lookup matches entity name lowercased against
+        // CleanValue, which strips special chars (*nsync ≠ nsync). Fall back to fetching all
+        // albums and filtering by AlbumArtist name in C#.
+        if (albums.Count == 0 && !string.IsNullOrEmpty(artist.Name))
+        {
+            _logger.LogInformation("[Subfin] getArtist name-filter fallback for {Name}", artist.Name);
+            var allQuery = new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = [BaseItemKind.MusicAlbum],
+                Recursive = true,
+            };
+            ApplyFolderScoping(allQuery, folderIds);
+            albums = _library.GetItemList(allQuery).OfType<MusicAlbum>()
+                .Where(a => string.Equals(a.AlbumArtist, artist.Name, StringComparison.OrdinalIgnoreCase)
+                         || a.AlbumArtists.Any(n => string.Equals(n, artist.Name, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
         }
 
         var mapped = ItemMapper.ToArtistWithAlbums(artist, albums);
@@ -446,6 +468,41 @@ public class SubsonicController : ControllerBase
             ParentId = guid,
             OrderBy = [(ItemSortBy.SortName, SortOrder.Ascending)],
         });
+
+        // Fallback for special-char artists (e.g. *NSYNC, AC/DC): getIndexes emits the tag entity GUID
+        // (parentless, used by AlbumArtistIds), but getMusicDirectory needs the folder/hierarchy entity
+        // GUIDs (the actual parents of albums). For normal artists the same entity serves both roles;
+        // for special-char artists Jellyfin normalizes the folder name (e.g. _NSYNC for *NSYNC) and
+        // creates a separate tag entity. There may be one folder entity per library.
+        if (children.Count == 0 && item is MusicArtist && item.ParentId == Guid.Empty)
+        {
+            var targetKey = CanonicalArtistKey(item.Name ?? "");
+            var folderQuery = new InternalItemsQuery(user)
+            {
+                IncludeItemTypes = [BaseItemKind.MusicArtist],
+                Recursive = true,
+            };
+            ApplyFolderScoping(folderQuery, GetEffectiveFolderIds(auth, null));
+            var folderEntities = _library.GetItemList(folderQuery)
+              .OfType<MusicArtist>()
+              .Where(a => a.ParentId != Guid.Empty && CanonicalArtistKey(a.Name ?? "") == targetKey)
+              .ToList();
+
+            if (folderEntities.Count > 0)
+            {
+                _logger.LogInformation("[Subfin] getMusicDirectory fallback: tag entity {TagName} → {Count} folder entity/entities",
+                    item.Name, folderEntities.Count);
+                children = folderEntities
+                    .SelectMany(fe => _library.GetItemList(new InternalItemsQuery(user)
+                    {
+                        ParentId = fe.Id,
+                        OrderBy = [(ItemSortBy.SortName, SortOrder.Ascending)],
+                    }))
+                    .DistinctBy(c => c.Id)
+                    .OrderBy(c => c.SortName)
+                    .ToList();
+            }
+        }
 
         var childMaps = children.Select(c => c switch
         {
@@ -894,12 +951,12 @@ public class SubsonicController : ControllerBase
         try
         {
             var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
-            var clientName = Request.Query["c"].ToString() is { Length: > 0 } cn ? cn : (auth.JellyfinDeviceName ?? "Subsonic");
+            var clientName = Request.Query["c"].ToString() is { Length: > 0 } cn ? cn : (auth.JellyfinDeviceName ?? "Subfin");
             var clientVersion = Request.Query["v"].ToString() is { Length: > 0 } cv ? cv : "1.0.0";
             var session = await _sessions.LogSessionActivity(
                 clientName, clientVersion,
                 auth.JellyfinDeviceId ?? "subfin-unknown",
-                auth.JellyfinDeviceName ?? "Subsonic Device",
+                auth.JellyfinDeviceName ?? "Subfin Device",
                 remoteIp, user);
 
             await _sessions.OnPlaybackStart(new PlaybackStartInfo
@@ -928,7 +985,7 @@ public class SubsonicController : ControllerBase
                     PositionTicks = positionTicks ?? 0L,
                     Failed = false
                 });
-                _logger.LogInformation("[Subsonic] scrobble: sent start+progress+stop (submission)");
+                _logger.LogInformation("[Subfin] scrobble: sent start+progress+stop (submission)");
             }
             else
             {
@@ -939,12 +996,12 @@ public class SubsonicController : ControllerBase
                     PositionTicks = positionTicks ?? 0L,
                     IsPaused = false
                 });
-                _logger.LogInformation("[Subsonic] scrobble: sent start+progress (now playing)");
+                _logger.LogInformation("[Subfin] scrobble: sent start+progress (now playing)");
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[Subsonic] scrobble: session reporting failed (non-fatal)");
+            _logger.LogWarning(ex, "[Subfin] scrobble: session reporting failed (non-fatal)");
         }
 
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
@@ -1156,7 +1213,7 @@ public class SubsonicController : ControllerBase
     private ShareXml BuildShareXml(ShareRecord s, string baseUrl, User user)
     {
         var secret = SubsonicStore.GetShareSecret(s.ShareUid) ?? "";
-        var url = $"{baseUrl}/Subsonic/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}";
+        var url = $"{baseUrl}/subfin/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}";
         var createdDt = DateTime.Parse(s.CreatedAt, CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal);
         var created = createdDt.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
@@ -1415,7 +1472,7 @@ public class SubsonicController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[Subsonic] Last.fm artist lookup failed for {Name}", artistName);
+            _logger.LogDebug(ex, "[Subfin] Last.fm artist lookup failed for {Name}", artistName);
             return null;
         }
     }
@@ -1457,7 +1514,7 @@ public class SubsonicController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[Subsonic] Last.fm album lookup failed for {Name}", albumName);
+            _logger.LogDebug(ex, "[Subfin] Last.fm album lookup failed for {Name}", albumName);
             return null;
         }
     }
@@ -1540,7 +1597,7 @@ public class SubsonicController : ControllerBase
 
         bool needsTranscode = (format != null && format != "raw") || bitRate > 0 || timeOff > 0;
 
-        _logger.LogInformation("[Subsonic] stream id={Id} format={Format} bitRate={BitRate} timeOff={TimeOff} needsTranscode={NeedsTranscode}",
+        _logger.LogInformation("[Subfin] stream id={Id} format={Format} bitRate={BitRate} timeOff={TimeOff} needsTranscode={NeedsTranscode}",
             id, format, bitRate, timeOff, needsTranscode);
 
         if (!needsTranscode)
@@ -1549,19 +1606,19 @@ public class SubsonicController : ControllerBase
         var apiKey = await GetOrCreatePluginApiKey();
         if (string.IsNullOrEmpty(apiKey))
         {
-            _logger.LogWarning("[Subsonic] Could not obtain plugin API key — serving direct");
+            _logger.LogWarning("[Subfin] Could not obtain plugin API key — serving direct");
             return PhysicalFile(item.Path, ItemMapper.AudioMimeType(item.Container), null, true);
         }
 
         var (container, audioCodec, mimeType) = MapTranscodeFormat(format);
         var qs = $"audioCodec={audioCodec}&static=false" +
                  $"&userId={auth.JellyfinUserId}" +
-                 $"&deviceId={Uri.EscapeDataString(auth.JellyfinDeviceId ?? "subsonic-plugin")}";
+                 $"&deviceId={Uri.EscapeDataString(auth.JellyfinDeviceId ?? "subfin")}";
         if (bitRate > 0) qs += $"&audioBitRate={bitRate * 1000}";
         if (timeOff > 0) qs += $"&startTimeTicks={(long)timeOff * 10_000_000L}";
 
         var url = $"{Request.Scheme}://{Request.Host}/Audio/{guid:N}/stream.{container}?{qs}";
-        _logger.LogInformation("[Subsonic] stream proxy → {Url}", url);
+        _logger.LogInformation("[Subfin] stream proxy → {Url}", url);
         var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.TryAddWithoutValidation("Authorization", $"MediaBrowser Token=\"{apiKey}\"");
 

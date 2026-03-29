@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Subfin — Subsonic Device Manager</title>
+  <title>Subfin — Device Manager</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #eee; background: #1a1a1a; }
     h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
@@ -17,14 +17,25 @@
     button.secondary { background: #444; }
     button.danger { background: #b00; }
     button:disabled { opacity: 0.4; cursor: default; }
-    #banner { padding: 0.6rem 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: none; font-size: 0.875rem; word-break: break-all; white-space: pre-wrap; }
+    #banner { padding: 0.6rem 0.8rem; border-radius: 4px; margin-bottom: 1rem; display: none; font-size: 0.875rem; }
     #banner.ok  { background: #1a3d1a; color: #6cda6c; display: block; }
-    #banner.err { background: #3d1a1a; color: #da6c6c; display: block; }
-    .device-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid #333; }
+    #banner.err { background: #3d1a1a; color: #da6c6c; display: block; word-break: break-all; white-space: pre-wrap; }
+    .cred-block { margin-top: 0.6rem; }
+    .cred-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.35rem; }
+    .cred-label { font-size: 0.8rem; color: #9ddb9d; min-width: 5rem; }
+    .cred-value { font-family: monospace; font-size: 0.85rem; background: #0d260d; border: 1px solid #2a6b2a; border-radius: 4px; padding: 0.25rem 0.5rem; flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; cursor: pointer; color: #c8f7c8; }
+    .cred-value:hover { background: #122e12; }
+    .cred-copy { font-size: 0.75rem; padding: 0.2rem 0.5rem; background: #2a6b2a; white-space: nowrap; flex-shrink: 0; }
+    .cred-note { font-size: 0.78rem; color: #9ddb9d; margin-top: 0.5rem; opacity: 0.8; }
+    .device-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid #333; flex-wrap: wrap; }
     .device-row:last-child { border-bottom: none; }
     .device-info { flex: 1; min-width: 0; }
     .device-label { font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .device-meta  { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
+    @media (max-width: 480px) {
+      .device-info { width: 100%; flex-basis: 100%; }
+      .device-row .btn-row { width: 100%; }
+    }
     #deviceList { margin-top: 0.5rem; }
     #noDevices { color: #888; font-size: 0.875rem; margin: 0.5rem 0; }
     .lib-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0; font-size: 0.9rem; }
@@ -37,7 +48,7 @@
   </style>
 </head>
 <body>
-  <h1>Subsonic Device Manager</h1>
+  <h1>Subfin Device Manager</h1>
   <p class="subtitle" id="subtitle">Loading…</p>
 
   <div id="banner"></div>
@@ -105,7 +116,7 @@
         return;
       }
 
-      const r = await fetch('/Subsonic/api/me', { headers: authHeaders() });
+      const r = await fetch('/subfin/api/me', { headers: authHeaders() });
       if (r.status === 401) {
         window.location.replace('/web/index.html#!/login.html');
         return;
@@ -133,6 +144,32 @@
       el.className = ok ? 'ok' : 'err';
     }
 
+    function showCredentials(username, password, title) {
+      const el = document.getElementById('banner');
+      el.className = 'ok';
+      el.style.display = '';
+      el.innerHTML = `<strong>${escHtml(title)}</strong>
+<div class="cred-block">
+  <div class="cred-row">
+    <span class="cred-label">Username</span>
+    <span class="cred-value" title="Click to copy" onclick="copyText(this,'${escHtml(username)}')">${escHtml(username)}</span>
+    <button class="cred-copy" onclick="copyText(null,'${escHtml(username)}')">Copy</button>
+  </div>
+  <div class="cred-row">
+    <span class="cred-label">Password</span>
+    <span class="cred-value" title="Click to copy" onclick="copyText(this,'${escHtml(password)}')">${escHtml(password)}</span>
+    <button class="cred-copy" onclick="copyText(null,'${escHtml(password)}')">Copy</button>
+  </div>
+</div>
+<div class="cred-note">Save this password — it won't be shown again.</div>`;
+    }
+
+    function copyText(el, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        if (el) { const orig = el.style.background; el.style.background = '#1a6b1a'; setTimeout(() => el.style.background = orig, 600); }
+      }).catch(() => {});
+    }
+
     function clearBanner() {
       const el = document.getElementById('banner');
       el.className = '';
@@ -144,17 +181,14 @@
     async function linkDevice() {
       clearBanner();
       const label = document.getElementById('deviceLabel').value.trim();
-      const r = await fetch('/Subsonic/api/devices/link', {
+      const r = await fetch('/subfin/api/devices/link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ deviceLabel: label }),
       });
       const d = await r.json();
       if (!r.ok) { showBanner(JSON.stringify(d), false); return; }
-      showBanner(
-        `Device linked!\n\nSubsonic username: ${d.subsonicUsername}\nPassword: ${d.password}\n\nSave this password — it won't be shown again.`,
-        true
-      );
+      showCredentials(d.subsonicUsername, d.password, 'Device linked!');
       document.getElementById('deviceLabel').value = '';
       loadDevices();
       loadLibraries();
@@ -163,7 +197,7 @@
     // ── Device list ───────────────────────────────────────────────────────────
 
     async function loadDevices() {
-      const r = await fetch('/Subsonic/api/devices', { headers: authHeaders() });
+      const r = await fetch('/subfin/api/devices', { headers: authHeaders() });
       if (!r.ok) { showBanner('Could not load devices (' + r.status + ')', false); return; }
       const devices = await r.json();
 
@@ -190,7 +224,7 @@
 
     async function deleteDevice(id) {
       if (!confirm('Unlink this device? The Subsonic client using it will stop working.')) return;
-      const r = await fetch(`/Subsonic/api/devices/${id}`, { method: 'DELETE', headers: authHeaders() });
+      const r = await fetch(`/subfin/api/devices/${id}`, { method: 'DELETE', headers: authHeaders() });
       if (!r.ok) { showBanner('Unlink failed (' + r.status + ')', false); return; }
       document.getElementById(`device-${id}`)?.remove();
       const list = document.getElementById('deviceList');
@@ -200,10 +234,10 @@
 
     async function resetPassword(id) {
       if (!confirm('Reset the password for this device? The Subsonic client will need to be reconfigured.')) return;
-      const r = await fetch(`/Subsonic/api/devices/${id}/reset-password`, { method: 'POST', headers: authHeaders() });
+      const r = await fetch(`/subfin/api/devices/${id}/reset-password`, { method: 'POST', headers: authHeaders() });
       const d = await r.json();
       if (!r.ok) { showBanner('Reset failed (' + r.status + ')', false); return; }
-      showBanner(`New password: ${d.password}\n\nUpdate your Subsonic client — this won't be shown again.`, true);
+      showCredentials(d.subsonicUsername, d.password, 'Password reset — update your Subsonic client.');
     }
 
     // ── Library selection ─────────────────────────────────────────────────────
@@ -212,7 +246,7 @@
 
     async function loadLibraries() {
       if (!currentUsername) return;
-      const r = await fetch(`/Subsonic/api/libraries?username=${encodeURIComponent(currentUsername)}`, { headers: authHeaders() });
+      const r = await fetch(`/subfin/api/libraries?username=${encodeURIComponent(currentUsername)}`, { headers: authHeaders() });
       if (!r.ok) { document.getElementById('libraryCard').style.display = 'none'; return; }
       const data = await r.json();
       libraryFolders = data.folders;
@@ -229,7 +263,7 @@
       const selectedIds = libraryFolders
         .filter(f => document.getElementById(`lib-${f.id}`)?.checked)
         .map(f => f.id);
-      const r = await fetch('/Subsonic/api/libraries', {
+      const r = await fetch('/subfin/api/libraries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ username: currentUsername, selectedIds }),
@@ -244,7 +278,7 @@
 
     async function loadShares(me) {
       // Detect admin by trying the admin endpoint
-      const adminR = await fetch('/Subsonic/api/admin/shares', { headers: authHeaders() });
+      const adminR = await fetch('/subfin/api/admin/shares', { headers: authHeaders() });
       if (adminR.ok) {
         isAdmin = true;
         const all = await adminR.json();
@@ -252,7 +286,7 @@
         return;
       }
       // Fall back to own shares
-      const r = await fetch('/Subsonic/api/shares', { headers: authHeaders() });
+      const r = await fetch('/subfin/api/shares', { headers: authHeaders() });
       if (!r.ok) return;
       const shares = await r.json();
       renderShares(shares, false);
@@ -273,7 +307,7 @@
         const created = s.created ? new Date(s.created).toLocaleDateString() : '—';
         const expires = s.expires ? new Date(s.expires).toLocaleDateString() : 'never';
         const meta = `${admin ? 'by ' + escHtml(s.username || '') + ' · ' : ''}created ${created} · expires ${expires} · ${s.visitCount ?? 0} visit${s.visitCount !== 1 ? 's' : ''}`;
-        const deleteEndpoint = admin ? `/Subsonic/api/admin/shares/${s.uid}` : `/Subsonic/api/shares/${s.uid}`;
+        const deleteEndpoint = admin ? `/subfin/api/admin/shares/${s.uid}` : `/subfin/api/shares/${s.uid}`;
         return `<div class="share-row" id="share-${escHtml(s.uid)}">
           <div class="share-info">
             <div class="share-desc">${escHtml(desc)}</div>

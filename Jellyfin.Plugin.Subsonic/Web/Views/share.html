@@ -21,7 +21,8 @@
     .track-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .track-meta { font-size: 0.78rem; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .track-dur { color: #666; font-size: 0.8rem; flex-shrink: 0; }
-    .download-link { display: inline-block; margin-top: 1rem; font-size: 0.82rem; color: #666; text-decoration: none; }
+    .download-links { margin-top: 1rem; display: flex; gap: 1.25rem; }
+    .download-link { font-size: 0.82rem; color: #666; text-decoration: none; }
     .download-link:hover { color: #aaa; }
     .empty { color: #666; font-size: 0.9rem; }
   </style>
@@ -39,7 +40,10 @@
   <ul class="tracklist" id="tracklist"></ul>
   <p class="empty" id="emptyMsg" style="display:none">No tracks in this share.</p>
 
-  <a class="download-link" href="/Subsonic/share/{{SHARE_UID}}/m3u?secret={{SECRET}}">↓ Download as M3U playlist</a>
+  <div class="download-links">
+    <a class="download-link" href="/subfin/share/{{SHARE_UID}}/m3u?secret={{SECRET}}">↓ Download M3U playlist</a>
+    <a class="download-link" href="/subfin/share/{{SHARE_UID}}/download?secret={{SECRET}}">↓ Download ZIP</a>
+  </div>
 
   <script>
     const tracks = {{TRACKS_JSON}};

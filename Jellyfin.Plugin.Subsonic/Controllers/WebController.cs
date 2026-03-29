@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -21,11 +22,11 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Subsonic.Controllers;
 
 /// <summary>
-/// Handles /Subsonic/* web UI routes: device management, library selection,
+/// Handles /subfin/* web UI routes: device management, library selection,
 /// Quick Connect linking, and public share pages.
 /// </summary>
 [ApiController]
-[Route("Subsonic")]
+[Route("subfin")]
 public class WebController : ControllerBase
 {
     private readonly IUserManager _userManager;
@@ -54,6 +55,7 @@ public class WebController : ControllerBase
     [HttpGet("share/{uid}")]
     public IActionResult SharePage(string uid)
     {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var secret = Request.Query["secret"].ToString();
         var share = SubsonicStore.GetShare(uid);
         if (share == null) return NotFound("Share not found.");
@@ -154,9 +156,10 @@ public class WebController : ControllerBase
         var (user, err) = ResolveUser();
         if (user == null) return err!;
         if (!OwnedBy(id, user)) return Forbid();
+        var device = SubsonicStore.GetDeviceById(id);
         var password = GeneratePassword();
         SubsonicStore.UpdateDevicePassword(id, password);
-        return Ok(new { password, message = "Password reset. Save this password — it will not be shown again." });
+        return Ok(new { subsonicUsername = device?.SubsonicUsername ?? "", password, message = "Password reset. Save this password — it will not be shown again." });
     }
 
     [HttpDelete("api/devices/{id}")]
@@ -199,6 +202,7 @@ public class WebController : ControllerBase
     [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult GetMyShares()
     {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var (user, err) = ResolveUser();
         if (user == null) return err!;
         var shares = SubsonicStore.GetSharesForUser(user.Username);
@@ -211,7 +215,7 @@ public class WebController : ControllerBase
                 created = s.CreatedAt,
                 expires = s.ExpiresAt,
                 visitCount = s.VisitCount,
-                url = $"{baseUrl}/Subsonic/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}",
+                url = $"{baseUrl}/subfin/share/{s.ShareUid}?secret={Uri.EscapeDataString(secret)}",
             };
         }));
     }
@@ -237,6 +241,7 @@ public class WebController : ControllerBase
     [Authorize(AuthenticationSchemes = "CustomAuthentication")]
     public IActionResult GetAllSharesAdmin()
     {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var (user, err) = ResolveUser();
         if (user == null) return err!;
         if (!user.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value)) return Forbid();
@@ -249,7 +254,7 @@ public class WebController : ControllerBase
                 description = t.Share.Description,
                 created = t.Share.CreatedAt, expires = t.Share.ExpiresAt,
                 visitCount = t.Share.VisitCount,
-                url = $"{baseUrl}/Subsonic/share/{t.Share.ShareUid}?secret={Uri.EscapeDataString(secret)}",
+                url = $"{baseUrl}/subfin/share/{t.Share.ShareUid}?secret={Uri.EscapeDataString(secret)}",
             };
         }));
     }
@@ -270,6 +275,7 @@ public class WebController : ControllerBase
     [HttpGet("share/{uid}/m3u")]
     public IActionResult ShareM3u(string uid)
     {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var secret = Request.Query["secret"].ToString();
         var share = SubsonicStore.GetShare(uid);
         if (share == null) return NotFound("Share not found.");
@@ -299,6 +305,80 @@ public class WebController : ControllerBase
 
         var bytes = Encoding.UTF8.GetBytes(sb.ToString());
         return File(bytes, "audio/x-mpegurl", $"share-{uid}.m3u8");
+    }
+
+    // ── Share: ZIP download ───────────────────────────────────────────────────
+
+    [HttpGet("share/{uid}/download")]
+    public async Task ShareZip(string uid)
+    {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) { Response.StatusCode = 404; return; }
+        var secret = Request.Query["secret"].ToString();
+        var share = SubsonicStore.GetShare(uid);
+        if (share == null) { Response.StatusCode = 404; return; }
+
+        var storedSecret = SubsonicStore.GetShareSecret(uid);
+        if (storedSecret != secret) { Response.StatusCode = 401; return; }
+
+        if (!string.IsNullOrEmpty(share.ExpiresAt) && DateTimeOffset.Parse(share.ExpiresAt) < DateTimeOffset.UtcNow)
+        { Response.StatusCode = 410; return; }
+
+        var m3u = new StringBuilder("#EXTM3U\n");
+        var usedNames = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var songEntries = new List<(Audio audio, string fileName)>();
+
+        // Resolve songs and deduplicate filenames
+        foreach (var id in share.EntryIdsFlat)
+        {
+            if (!Guid.TryParse(id, out var guid)) continue;
+            var audio = _library.GetItemById<Audio>(guid);
+            if (audio?.Path == null) continue;
+
+            var baseName = Path.GetFileName(audio.Path);
+            string fileName;
+            if (!usedNames.ContainsKey(baseName))
+            {
+                usedNames[baseName] = 0;
+                fileName = baseName;
+            }
+            else
+            {
+                usedNames[baseName]++;
+                var ext = Path.GetExtension(baseName);
+                var stem = Path.GetFileNameWithoutExtension(baseName);
+                fileName = $"{stem} ({usedNames[baseName]}){ext}";
+            }
+            songEntries.Add((audio, fileName));
+        }
+
+        // Build ZIP into a MemoryStream first: ZipArchive.Dispose() writes the central
+        // directory synchronously, which Kestrel rejects when writing directly to Response.Body.
+        using var ms = new MemoryStream();
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var (song, fileName) in songEntries)
+            {
+                var duration = (int)((song.RunTimeTicks ?? 0) / 10_000_000);
+                var artist = song.AlbumArtists.FirstOrDefault() ?? "";
+                m3u.Append($"#EXTINF:{duration},{artist} - {song.Name ?? ""}\n");
+                m3u.Append(fileName + "\n");
+
+                var entry = zip.CreateEntry(fileName, CompressionLevel.NoCompression);
+                using var entryStream = entry.Open();
+                using var fileStream = System.IO.File.OpenRead(song.Path!);
+                await fileStream.CopyToAsync(entryStream);
+            }
+
+            var m3uEntry = zip.CreateEntry("playlist.m3u8");
+            using var m3uStream = new StreamWriter(m3uEntry.Open(), Encoding.UTF8);
+            await m3uStream.WriteAsync(m3u.ToString());
+        } // Dispose writes central directory to ms (sync is fine — ms is in-memory)
+
+        Response.ContentType = "application/zip";
+        Response.Headers["Content-Disposition"] = $"attachment; filename=\"share-{uid}.zip\"";
+        Response.ContentLength = ms.Length;
+        ms.Position = 0;
+        await ms.CopyToAsync(Response.Body);
     }
 
     // ── API: library selection ───────────────────────────────────────────────

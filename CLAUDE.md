@@ -12,8 +12,8 @@ An OpenSubsonic-compatible REST API exposed as a Jellyfin plugin. Subsonic/Navid
 dotnet build                        # must pass before any commit
 dotnet test                         # run xUnit tests
 ./scripts/bump-version.sh 0.2.1.0   # bump version in meta.json + .csproj (four-part, single command)
-./scripts/publish.sh                # build, zip, upload to home.kray.pw
-./scripts/deploy-dev.sh             # publish → download ZIP → install to localenv → restart → smoke test
+./scripts/publish.sh                # build, zip, upload to home.kray.pw (production only)
+./scripts/deploy-dev.sh             # dotnet publish → copy DLL into localenv → restart → smoke test
 ./scripts/endpoint-sweep.sh         # hit all REST endpoints and report pass/fail
 node scripts/get-creds.js           # print decrypted app passwords from the plugin DB
 ./scripts/probe-api.sh              # compile a C# snippet against Jellyfin 10.11.6 to verify API signatures
@@ -22,7 +22,7 @@ node scripts/get-creds.js           # print decrypted app passwords from the plu
 ## Localenv
 
 Jellyfin runs in `../subfin/localenv/` (docker compose). The plugin dir is:
-`../subfin/localenv/jellyfin-data/config/plugins/Subsonic_0.1.0.0/`
+`../subfin/localenv/jellyfin-data/config/plugins/Subfin_<version>/`
 
 **Credentials:** `node scripts/get-creds.js` decrypts app passwords from the plugin DB using
 PBKDF2-SHA256 (100k iterations) + AES-256-GCM. Salt is read from
@@ -31,7 +31,7 @@ Jellyfin user `user1` password: `password123`.
 
 **Stale Jellyfin token recovery:** If the plugin gets 401 errors after Jellyfin restarts, its
 stored tokens may have been invalidated. Re-link via the plugin web UI at
-`http://localhost:8096/Subsonic/`, or get a fresh token from Jellyfin and update the DB
+`http://localhost:8096/subfin/`, or get a fresh token from Jellyfin and update the DB
 by running a script *inside the Jellyfin container* (host can't write to the DB — it's
 owned by the container user).
 
@@ -71,7 +71,7 @@ Subsonic client → /rest/{method} → SubsonicController → SubsonicAuth.Resol
 | `PluginServiceRegistrator.cs` | Registers SubsonicAuth via DI |
 | `Configuration/PluginConfiguration.cs` | Salt, LastFM key, logRest, CORS origins |
 | `Controllers/SubsonicController.cs` | All `/rest/*` endpoints |
-| `Controllers/WebController.cs` | `/Subsonic/*` web UI: device management, library selection, share pages |
+| `Controllers/WebController.cs` | `/subfin/*` web UI: device management, library selection, share pages |
 | `Store/SubsonicStore.cs` | All SQLite access (static class) |
 | `Store/Crypto.cs` | AES-256-GCM encrypt/decrypt; PBKDF2-SHA256 key derivation |
 | `Store/Schema.sql` | DB schema (embedded resource) |
@@ -82,9 +82,9 @@ Subsonic client → /rest/{method} → SubsonicController → SubsonicAuth.Resol
 
 ### URL paths
 - `/rest/{method}` — All Subsonic API endpoints
-- `/Subsonic/` — Web UI (device management)
-- `/Subsonic/share/{uid}` — Public share pages
-- `/Subsonic/api/*` — Web UI REST API
+- `/subfin/` — Web UI (device management)
+- `/subfin/share/{uid}` — Public share pages
+- `/subfin/api/*` — Web UI REST API
 
 ### Jellyfin services used (via DI)
 - `ILibraryManager` — item queries, folder listing, playlists, delete
@@ -216,11 +216,11 @@ var entryIds = indexesToRemove
 
 **`is="emby-*"` attributes** (`is="emby-input"`, `is="emby-checkbox"`, `is="emby-button"`) trigger Jellyfin's webcomponents polyfill. The polyfill may throw `Uncaught TypeError: can't access property "htmlFor"` during element upgrade — this error is harmless (cosmetic only) as long as scripts are correctly placed inside `data-role="page"`. It does NOT abort script execution in that context.
 
-**Keep config.html minimal.** Features that require dynamic data fetched by inline JS are risky. If the data is also available in `/Subsonic/` (index.html), omit it from config.html rather than duplicating with fragile inline fetches.
+**Keep config.html minimal.** Features that require dynamic data fetched by inline JS are risky. If the data is also available in `/subfin/` (index.html), omit it from config.html rather than duplicating with fragile inline fetches.
 
 ## Web UI auth pattern
 
-The `/Subsonic/` page uses the Jellyfin session — no separate login.
+The `/subfin/` page uses the Jellyfin session — no separate login.
 
 **Frontend** reads token from `localStorage["jellyfin_credentials"]`:
 ```javascript
@@ -312,7 +312,7 @@ The artist index is expensive (scans all albums). Cached in `derived_cache` with
 
 **Testing after deploy:** Always clear `derived_cache` before validating artist-related fixes, otherwise stale cache masks the change:
 ```bash
-sqlite3 ../subfin/localenv/jellyfin-data/config/data/SubsonicPlugin/subsonic.db "DELETE FROM derived_cache;"
+sqlite3 ../subfin/localenv/jellyfin-data/config/data/SubfinPlugin/subsonic.db "DELETE FROM derived_cache;"
 ```
 
 ## ID prefixes
@@ -369,9 +369,9 @@ Navic reads `.entries.last()` for the payload key. Use `JsonObject` (insertion-o
 
 **`getArtist` returns 0 albums for an artist that appears in `getArtists`** → `BuildArtistList` used `album.MusicArtist?.Id` (folder entity) instead of `_library.GetArtist(name)?.Id` (tag entity). The wrong entity's Guid doesn't match what `AlbumArtistIds` queries against. See Jellyfin artist entity model above.
 
-**Artist index fix deployed but `getArtists` still shows old data** → `derived_cache` is stale (15-min TTL). Clear it: `sqlite3 .../SubsonicPlugin/subsonic.db "DELETE FROM derived_cache;"` then re-request.
+**Artist index fix deployed but `getArtists` still shows old data** → `derived_cache` is stale (15-min TTL). Clear it: `sqlite3 .../SubfinPlugin/subsonic.db "DELETE FROM derived_cache;"` then re-request.
 
-**Web UI shows "Loading…" indefinitely with no console errors** → the inline `<script>` block is not executing at all (Jellyfin SPA injection swallowed it). To confirm: add a synchronous DOM mutation as the very first line of the script (e.g., `document.title = 'ran';`). If it doesn't change, the script never ran. Fix: use `pagebeforeshow` event and `ApiClient.accessToken()` rather than direct calls and `localStorage`; or remove the feature from `config.html` if it's covered by `/Subsonic/`.
+**Web UI shows "Loading…" indefinitely with no console errors** → the inline `<script>` block is not executing at all (Jellyfin SPA injection swallowed it). To confirm: add a synchronous DOM mutation as the very first line of the script (e.g., `document.title = 'ran';`). If it doesn't change, the script never ran. Fix: use `pagebeforeshow` event and `ApiClient.accessToken()` rather than direct calls and `localStorage`; or remove the feature from `config.html` if it's covered by `/subfin/`.
 
 **Web UI "Loading…" stuck after confirmed script execution** → fetch is either pending or the `.then`/`.catch` chain is failing silently. First add `r.text()` instead of `r.json()` and log/display the raw response to see what the server is actually returning before reasoning about handling logic.
 
@@ -414,6 +414,6 @@ When proxying to Jellyfin's audio endpoints for transcoding, use `/Audio/{id}/st
 
 Always add diagnostic logging before testing proxy code:
 ```csharp
-_logger.LogInformation("[Subsonic] stream proxy → {Url}", url);
+_logger.LogInformation("[Subfin] stream proxy → {Url}", url);
 ```
 Without this, a version mismatch on prod is indistinguishable from a logic bug.

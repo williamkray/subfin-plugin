@@ -8,8 +8,17 @@ namespace Jellyfin.Plugin.Subsonic.Response;
 public static class SubsonicConstants
 {
     public const string Version = "1.16.1";
-    public static string ServerVersion =>
-        SubsonicPlugin.Instance?.Version?.ToString() ?? "0.0.0";
+    public static string ServerVersion
+    {
+        get
+        {
+            var v = SubsonicPlugin.Instance?.Version;
+            if (v == null) return "0.0.0";
+            // Parts 1-2 (Major/Minor) encode the Jellyfin target (e.g. 10.11).
+            // Parts 3-4 (Build/Revision) are the plugin version exposed to Subsonic clients.
+            return $"{v.Build}.{v.Revision}.0";
+        }
+    }
     public const string ServerType = "subfin-plugin";
 }
 
