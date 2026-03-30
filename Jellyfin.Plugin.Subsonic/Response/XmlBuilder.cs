@@ -133,7 +133,7 @@ public static class XmlBuilder
     public static string OpenSubsonicExtensions() => OkEnvelope(w =>
     {
         w.WriteStartElement("openSubsonicExtensions", Ns);
-        foreach (var (name, versions) in new[] { ("template", new[] { 1 }), ("transcodeOffset", new[] { 1 }) })
+        foreach (var (name, versions) in new[] { ("template", new[] { 1 }), ("transcodeOffset", new[] { 1 }), ("songLyrics", new[] { 1 }) })
         {
             w.WriteStartElement("extension", Ns);
             w.WriteAttributeString("name", name);

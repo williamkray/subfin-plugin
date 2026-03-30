@@ -115,8 +115,8 @@ run getStarred2
 [ -n "$SONG_ID"   ] && run getSimilarSongs  "id=$SONG_ID"   || run getSimilarSongs  ""
 [ -n "$SONG_ID"   ] && run getSimilarSongs2 "id=$SONG_ID"   || run getSimilarSongs2 ""
 run getTopSongs
-run getLyrics
-run getLyricsBySongId
+[ -n "$SONG_ID"   ] && run getLyrics          "id=$SONG_ID"   || run getLyrics          ""
+[ -n "$SONG_ID"   ] && run getLyricsBySongId  "id=$SONG_ID"   || run getLyricsBySongId  ""
 
 # Playback state
 run getNowPlaying

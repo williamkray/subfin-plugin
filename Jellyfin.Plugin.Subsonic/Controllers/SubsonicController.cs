@@ -21,6 +21,7 @@ using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Lyrics;
 using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Security;
 using MediaBrowser.Controller.Session;
@@ -49,6 +50,7 @@ public class SubsonicController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMusicManager _musicManager;
     private readonly IAuthenticationManager _authManager;
+    private readonly ILyricManager _lyricManager;
     private readonly ILogger<SubsonicController> _logger;
 
     public SubsonicController(
@@ -61,6 +63,7 @@ public class SubsonicController : ControllerBase
         IHttpClientFactory httpClientFactory,
         IMusicManager musicManager,
         IAuthenticationManager authManager,
+        ILyricManager lyricManager,
         ILogger<SubsonicController> logger)
     {
         _auth = auth;
@@ -72,6 +75,7 @@ public class SubsonicController : ControllerBase
         _httpClientFactory = httpClientFactory;
         _musicManager = musicManager;
         _authManager = authManager;
+        _lyricManager = lyricManager;
         _logger = logger;
     }
 
@@ -123,7 +127,7 @@ public class SubsonicController : ControllerBase
     {
         "ping" => (SubsonicEnvelope.Ok(), XmlBuilder.Ping()),
         "getlicense" => (SubsonicEnvelope.Ok(new() { ["license"] = new Dictionary<string, object> { ["valid"] = true, ["email"] = "", ["licenseExpires"] = "2099-01-01T00:00:00.000Z" } }), XmlBuilder.License()),
-        "getopensubsonicextensions" => (SubsonicEnvelope.Ok(new() { ["openSubsonicExtensions"] = new[] { new Dictionary<string, object> { ["name"] = "template", ["versions"] = new[] { 1 } }, new Dictionary<string, object> { ["name"] = "transcodeOffset", ["versions"] = new[] { 1 } } } }), XmlBuilder.OpenSubsonicExtensions()),
+        "getopensubsonicextensions" => (SubsonicEnvelope.Ok(new() { ["openSubsonicExtensions"] = new[] { new Dictionary<string, object> { ["name"] = "template", ["versions"] = new[] { 1 } }, new Dictionary<string, object> { ["name"] = "transcodeOffset", ["versions"] = new[] { 1 } }, new Dictionary<string, object> { ["name"] = "songLyrics", ["versions"] = new[] { 1 } } } }), XmlBuilder.OpenSubsonicExtensions()),
         _ => (SubsonicEnvelope.Error(ErrorCode.NotFound, "Not found"), XmlBuilder.ErrorEnvelope(ErrorCode.NotFound, "Not found"))
     };
 
@@ -175,8 +179,8 @@ public class SubsonicController : ControllerBase
             "getalbuminfo" or "getalbuminfo2" => await GetAlbumInfo(auth, user, p, format, method.EndsWith("2")),
             "getsimilarsongs" or "getsimilarsongs2" => GetSimilarSongs(user, p, format, method.EndsWith("2")),
             "gettopsongs" => GetTopSongs(user, p, format),
-            "getlyrics" => GetLyrics(format),
-            "getlyricsbysongid" => GetLyricsBySongId(format),
+            "getlyrics" => await GetLyrics(user, p, format),
+            "getlyricsbysongid" => await GetLyricsBySongId(user, p, format),
             "stream" => await Stream(auth, p),
             "download" => Download(p),
             "getcoverart" => GetCoverArt(p),
@@ -1519,19 +1523,137 @@ public class SubsonicController : ControllerBase
         }
     }
 
-    private IActionResult GetLyrics(string format)
+    private async Task<IActionResult> GetLyrics(User user, QueryParams p, string format)
     {
-        var json = SubsonicEnvelope.Ok(new() { ["lyrics"] = new Dictionary<string, object>() });
+        var artist = p.Get("artist") ?? "";
+        var title = p.Get("title") ?? "";
+        Audio? song = null;
+
+        // Prefer lookup by id if provided (more reliable than artist/title matching)
+        var id = p.Id;
+        if (!string.IsNullOrEmpty(id) && Guid.TryParse(ItemMapper.StripPrefix(id), out var guid))
+            song = _library.GetItemById<Audio>(guid);
+
+        // Fall back to searching by title
+        if (song == null && !string.IsNullOrEmpty(title))
+        {
+            var results = _library.GetItemList(new InternalItemsQuery(user)
+            {
+                SearchTerm = title,
+                IncludeItemTypes = [BaseItemKind.Audio],
+                Limit = 10,
+                Recursive = true,
+            }).OfType<Audio>();
+
+            // Match artist too if provided
+            song = string.IsNullOrEmpty(artist)
+                ? results.FirstOrDefault()
+                : results.FirstOrDefault(s => s.Artists.Any(a => string.Equals(a, artist, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        string lyricsText = "";
+        string resolvedArtist = artist;
+        string resolvedTitle = title;
+
+        if (song != null)
+        {
+            resolvedArtist = song.Artists.FirstOrDefault() ?? artist;
+            resolvedTitle = song.Name ?? title;
+            var dto = await _lyricManager.GetLyricsAsync(song, CancellationToken.None);
+            if (dto?.Lyrics != null)
+                lyricsText = string.Join("\n", dto.Lyrics.Select(l => l.Text ?? ""));
+        }
+
+        var json = SubsonicEnvelope.Ok(new()
+        {
+            ["lyrics"] = new Dictionary<string, object?>
+            {
+                ["artist"] = resolvedArtist,
+                ["title"] = resolvedTitle,
+                ["value"] = lyricsText,
+            }
+        });
+
         return Respond(format, json, XmlBuilder.OkEnvelope(w =>
-        { w.WriteStartElement("lyrics", "http://subsonic.org/restapi"); w.WriteEndElement(); }));
+        {
+            w.WriteStartElement("lyrics", "http://subsonic.org/restapi");
+            w.WriteAttributeString("artist", resolvedArtist);
+            w.WriteAttributeString("title", resolvedTitle);
+            if (!string.IsNullOrEmpty(lyricsText))
+                w.WriteString(lyricsText);
+            w.WriteEndElement();
+        }));
     }
 
-    private IActionResult GetLyricsBySongId(string format)
+    private async Task<IActionResult> GetLyricsBySongId(User user, QueryParams p, string format)
     {
+        var id = p.Id;
+        if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
+        if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
+
+        var song = _library.GetItemById<Audio>(guid);
+        if (song == null) return ErrorResponse(format, ErrorCode.NotFound, "Song not found");
+
+        var dto = await _lyricManager.GetLyricsAsync(song, CancellationToken.None);
+
+        var structuredLyrics = new List<object>();
+        if (dto?.Lyrics != null && dto.Lyrics.Count > 0)
+        {
+            // Mark synced if metadata says so OR every line has a non-zero timestamp (LRC files
+            // don't always set IsSynced). Require ALL lines to have timestamps — Tempus crashes
+            // (NPE) on auto-unbox if any synced line is missing start.
+            var allHaveTimestamps = dto.Lyrics.All(l => l.Start.HasValue && l.Start.Value > 0);
+            var synced = (dto.Metadata?.IsSynced == true || allHaveTimestamps) && dto.Lyrics.All(l => l.Start.HasValue);
+            var lang = "und"; // undetermined — Jellyfin doesn't expose language per lyric set
+            var displayArtist = song.Artists.FirstOrDefault() ?? "";
+            var displayTitle = song.Name ?? "";
+
+            var lines = dto.Lyrics.Select(l =>
+            {
+                // Always include start (even for unsynced) — Navic's Line.start is non-nullable Int.
+                // For unsynced lines or lines without a timestamp, default to 0.
+                var startMs = synced && l.Start.HasValue ? (int)(l.Start.Value / 10000L) : 0;
+                return (object)new Dictionary<string, object> { ["start"] = startMs, ["value"] = l.Text ?? "" };
+            }).ToList();
+
+            structuredLyrics.Add(new Dictionary<string, object>
+            {
+                ["lang"] = lang,
+                ["synced"] = synced,
+                ["displayArtist"] = displayArtist,
+                ["displayTitle"] = displayTitle,
+                ["line"] = lines,
+            });
+        }
+
         var json = SubsonicEnvelope.Ok(new()
-        { ["lyricsList"] = new Dictionary<string, object> { ["structuredLyrics"] = new List<object>() } });
+        {
+            ["lyricsList"] = new Dictionary<string, object> { ["structuredLyrics"] = structuredLyrics }
+        });
+
         return Respond(format, json, XmlBuilder.OkEnvelope(w =>
-        { w.WriteStartElement("lyricsList", "http://subsonic.org/restapi"); w.WriteEndElement(); }));
+        {
+            w.WriteStartElement("lyricsList", "http://subsonic.org/restapi");
+            foreach (var entry in structuredLyrics.Cast<Dictionary<string, object>>())
+            {
+                var isSynced = (bool)entry["synced"];
+                var entryLang = (string)entry["lang"];
+                w.WriteStartElement("structuredLyrics", "http://subsonic.org/restapi");
+                w.WriteAttributeString("lang", entryLang);
+                w.WriteAttributeString("synced", isSynced ? "true" : "false");
+                w.WriteAttributeString("displayArtist", (string)entry["displayArtist"]);
+                w.WriteAttributeString("displayTitle", (string)entry["displayTitle"]);
+                foreach (var lineObj in ((List<object>)entry["line"]).Cast<Dictionary<string, object>>())
+                {
+                    w.WriteStartElement("line", "http://subsonic.org/restapi");
+                    w.WriteAttributeString("start", lineObj["start"].ToString());
+                    w.WriteAttributeString("value", lineObj["value"]?.ToString() ?? "");
+                    w.WriteEndElement();
+                }
+                w.WriteEndElement();
+            }
+            w.WriteEndElement();
+        }));
     }
 
     // ── stream / download ────────────────────────────────────────────────────
