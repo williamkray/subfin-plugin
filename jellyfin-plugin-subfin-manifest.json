@@ -9,6 +9,14 @@
     "owner": "williamkray",
     "versions": [
       {
+        "checksum": "a714a28a2780944afdcb63d9567f373e",
+        "changelog": "0ad9350 add lyrics support\n00d6602 lots of cleanup",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://home.kray.pw/jellyfin-plugin-subfin_10.11.5.0.zip",
+        "timestamp": "2026-03-30T00:04:55Z",
+        "version": "10.11.5.0"
+      },
+      {
         "checksum": "0c72f73b44be4d637b02560516c232b1",
         "changelog": "",
         "targetAbi": "10.11.0.0",
