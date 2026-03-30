@@ -383,7 +383,7 @@
         <input class="rename-input" id="rename-input-${escHtml(uid)}" type="text" value="${escHtml(currentDesc)}">
         <div class="btn-row" style="margin-top:0.2rem">
           <button style="padding:0.2rem 0.6rem;font-size:0.8rem" onclick="saveRename('${escHtml(uid)}','${escHtml(endpoint)}')">Save</button>
-          <button class="secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem" onclick="cancelRename('${escHtml(uid)}',${JSON.stringify(currentDesc)})">Cancel</button>
+          <button class="secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem" onclick="cancelRename('${escHtml(uid)}',${escHtml(JSON.stringify(currentDesc))})">Cancel</button>
         </div>`;
       const input = document.getElementById(`rename-input-${uid}`);
       if (input) { input.focus(); input.select(); }
