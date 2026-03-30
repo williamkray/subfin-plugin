@@ -264,6 +264,34 @@ curl -s "http://localhost:8096/rest/<method>.view?u=...&p=...&v=1.16.1&c=test" |
 # Must NOT show: <album><id>...</id><name>...</name></album>
 ```
 
+## Jellyfin lyrics API (ILyricManager)
+
+```csharp
+// Namespace: MediaBrowser.Controller.Lyrics
+// Inject: ILyricManager _lyricManager
+LyricDto? dto = await _lyricManager.GetLyricsAsync(audioItem, CancellationToken.None);
+// dto.Lyrics: IReadOnlyList<LyricLine>  (Text: string, Start: long? ticks)
+// dto.Metadata: LyricMetadata  (IsSynced: bool?, Artist, Title, ...)
+```
+
+**`IsSynced` is unreliable — always null for `.lrc` files.** Detect synced lyrics by checking whether all lines carry non-zero timestamps:
+```csharp
+var allHaveTimestamps = dto.Lyrics.All(l => l.Start.HasValue && l.Start.Value > 0);
+var synced = (dto.Metadata?.IsSynced == true || allHaveTimestamps) && dto.Lyrics.All(l => l.Start.HasValue);
+```
+
+**Ticks → milliseconds:** `(int)(l.Start.Value / 10000L)`
+
+**Lyrics not available after download task completes:** `GetLyricsAsync` returns null until the item has been re-indexed. A full library scan (`POST /Library/Refresh`) is async and slow. For targeted testing, force a single-item refresh first:
+```bash
+curl -s -X POST "http://localhost:8096/Items/{id}/Refresh?MetadataRefreshMode=FullRefresh&ImageRefreshMode=FullRefresh" \
+  -H "X-Emby-Authorization: MediaBrowser Token=\"$TOKEN\""
+```
+
+**Client compat rules for `getLyricsBySongId`:**
+- Navic: `displayArtist`, `displayTitle` non-nullable — always include even though spec marks optional; `line.start` non-nullable `Int` — use `0` for unsynced lines
+- Tempus: only routes to `getLyricsBySongId` when `songLyrics` is in `getOpenSubsonicExtensions`; auto-unboxes `line.start` in seek handler — crash if any synced line missing `start`
+
 ## Share response rules (client crash prevention)
 
 - **`expires`**: Always include — use `expires_at` when set, or `created_at + 1 year` as fallback. Tempus crashes if absent.

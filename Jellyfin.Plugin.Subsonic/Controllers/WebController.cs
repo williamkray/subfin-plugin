@@ -270,6 +270,29 @@ public class WebController : ControllerBase
         return Ok();
     }
 
+    [HttpPatch("api/shares/{uid}")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult RenameMyShare(string uid, [FromBody] RenameShareRequest req)
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        if (!shares.Any(s => s.ShareUid == uid)) return Forbid();
+        SubsonicStore.UpdateShareDescription(uid, req.Description);
+        return Ok();
+    }
+
+    [HttpPatch("api/admin/shares/{uid}")]
+    [Authorize(AuthenticationSchemes = "CustomAuthentication")]
+    public IActionResult AdminRenameShare(string uid, [FromBody] RenameShareRequest req)
+    {
+        var (user, err) = ResolveUser();
+        if (user == null) return err!;
+        if (!user.Permissions.Any(p => p.Kind == PermissionKind.IsAdministrator && p.Value)) return Forbid();
+        SubsonicStore.UpdateShareDescription(uid, req.Description);
+        return Ok();
+    }
+
     // ── Share: M3U download ──────────────────────────────────────────────────
 
     [HttpGet("share/{uid}/m3u")]
@@ -457,3 +480,4 @@ public record RenameRequest(string? Label);
 public record QuickConnectStartRequest(string SubsonicUsername);
 public record QuickConnectCompleteRequest(string Secret, string SubsonicUsername, string? DeviceLabel);
 public record SetLibrariesRequest(string Username, List<string>? SelectedIds);
+public record RenameShareRequest(string? Description);

@@ -2,8 +2,9 @@
 name: tempus-sme
 description: >
   Expert on Tempus Android Subsonic client. Use when implementing or validating
-  share-related endpoints. Knows Tempus crash patterns, Kotlin/Gson deserialization
-  behavior, and required fields. Proactively flag missing `expires` on share responses.
+  share-related or lyrics-related endpoints. Knows Tempus crash patterns, Kotlin/Gson
+  deserialization behavior, and required fields. Proactively flag missing `expires` on
+  share responses and missing `value`/`start` on lyrics line entries.
 tools: Read, Grep, Glob, WebFetch, WebSearch
 model: sonnet
 memory: project
@@ -90,11 +91,43 @@ Call<ApiResponse> stream(@QueryMap Map<String, String> params,
 
 If `UniversalAudioController` appears in Jellyfin logs without a preceding `[Subfin] stream` log line, the plugin is running old code (version mismatch), not a Tempus bypass. Check `serverVersion` in ping response to confirm.
 
+## Lyrics behavior (verified 2026-03-29)
+
+Tempus selects the lyrics endpoint at runtime:
+- Calls `getOpenSubsonicExtensions`, checks for `name == "songLyrics"` in the array
+- If found → `getLyricsBySongId(id)` (OpenSubsonic, scrolling karaoke UI)
+- If not → `getLyrics(artist, title)` (legacy, static display)
+
+### `getLyrics` (legacy)
+- JSON only. Reads `lyrics.value` (String?) via Gson — null is safe, just shows empty panel.
+
+### `getLyricsBySongId` (OpenSubsonic)
+
+**CRASH 1 — `line.value` is `lateinit var String`**
+Missing `"value"` on any line → `UninitializedPropertyAccessException` on first read. Every line must include `"value"`.
+
+**CRASH 2 — `line.start` auto-unbox NPE in seek handler**
+```java
+final int lineStart = lines.get(i).getStart();  // auto-unboxes Integer? → int
+```
+If `start` is absent on any line in a `synced=true` response → NPE. Safe to omit only when `synced=false`.
+
+`synced: Boolean` defaults `false`. `lang`, `displayArtist`, `displayTitle`, `offset` are all safe to omit.
+
+### Required fields summary
+
+| Endpoint | Field | Crash if absent? |
+|---|---|---|
+| `getLyrics` | `lyrics.value` | no — empty display |
+| `getLyricsBySongId` | each `line.value` | **YES** |
+| `getLyricsBySongId` | each `line.start` when `synced=true` | **YES — NPE** |
+
 ## Task contract
 
 When given a response shape or JSON sample:
 
 1. Simulate Gson deserialization — identify which fields will be `null` if absent
-2. Check `expires` is always present and non-null
-3. Flag any field accessed without null guard in known UI code
-4. Return: **PASS** or **FAIL** with specific field/crash path citations
+2. Check `expires` is always present and non-null on share responses
+3. Check `line.value` present on all lyrics lines; check `line.start` present on all lines when `synced=true`
+4. Flag any field accessed without null guard in known UI code
+5. Return: **PASS** or **FAIL** with specific field/crash path citations

@@ -4,7 +4,7 @@ description: >
   Expert on Navic Android Subsonic client (uses zt64/subsonic-kotlin library). Use when
   implementing or validating any REST endpoint to check Navic JSON parsing requirements,
   required fields, and known crash patterns. Proactively flag mediaType values, MusicFolder
-  integer IDs, Instant datetime format, and null artistId.
+  integer IDs, Instant datetime format, null artistId, and missing StructuredLyrics fields.
 tools: Read, Grep, Glob, WebFetch, WebSearch
 model: sonnet
 memory: project
@@ -72,6 +72,27 @@ Affects: `Share.created`, `Share.expires`, `Album.created`, `Playlist.created`, 
 | `ArtistInfo` | `mediumImageUrl` | `String` | crashes if absent |
 | `ArtistInfo` | `largeImageUrl` | `String` | crashes if absent |
 | `Artists` | `ignoredArticles` | `String` | crashes if absent |
+
+### getLyricsBySongId — StructuredLyrics (verified 2026-03-29)
+
+Navic calls `getLyricsBySongId` only. Crashes are caught by `try/catch` → silent no-lyrics (no app crash).
+
+```kotlin
+data class StructuredLyrics(
+    val lang: String,           // NON-NULLABLE — crash if absent
+    val synced: Boolean,        // NON-NULLABLE — crash if absent
+    val displayArtist: String,  // NON-NULLABLE — crash if absent (spec says optional!)
+    val displayTitle: String,   // NON-NULLABLE — crash if absent (spec says optional!)
+    val offset: Int = 0,        // safe
+    val lines: List<Line> = emptyList()  // safe
+)
+data class Line(
+    val start: Int,    // NON-NULLABLE — crash if absent (spec says optional for unsynced!)
+    val value: String  // NON-NULLABLE — crash if absent
+)
+```
+
+**Rule:** Always send `displayArtist`, `displayTitle`, and `start` (use `0` for unsynced lines).
 
 ### Key ordering — SubsonicEnvelope JSON response
 

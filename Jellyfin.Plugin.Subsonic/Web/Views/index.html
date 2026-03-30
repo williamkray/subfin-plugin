@@ -7,9 +7,15 @@
   <style>
     body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #eee; background: #1a1a1a; }
     h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 0.6rem; }
+    .page-nav { font-size: 0.82rem; margin-bottom: 1.2rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+    .page-nav a { color: #5ab0ff; text-decoration: none; }
+    .page-nav a:hover { text-decoration: underline; }
     .card { border: 1px solid #444; border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; background: #252525; }
-    h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+    .h2-row { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 0.75rem; }
+    h2 { font-size: 1rem; margin: 0; }
+    .top-link { font-size: 0.75rem; color: #666; text-decoration: none; }
+    .top-link:hover { color: #5ab0ff; }
     label { display: block; font-size: 0.875rem; color: #aaa; margin-bottom: 0.2rem; }
     input[type=text] { display: block; width: 100%; box-sizing: border-box; padding: 0.4rem 0.6rem; background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; margin-bottom: 0.75rem; }
     .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -27,11 +33,13 @@
     .cred-value:hover { background: #122e12; }
     .cred-copy { font-size: 0.75rem; padding: 0.2rem 0.5rem; background: #2a6b2a; white-space: nowrap; flex-shrink: 0; }
     .cred-note { font-size: 0.78rem; color: #9ddb9d; margin-top: 0.5rem; opacity: 0.8; }
+    .cred-note a { color: #9ddb9d; }
     .device-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid #333; flex-wrap: wrap; }
     .device-row:last-child { border-bottom: none; }
     .device-info { flex: 1; min-width: 0; }
     .device-label { font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .device-meta  { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
+    .device-creds { width: 100%; flex-basis: 100%; background: #0d260d; border: 1px solid #2a6b2a; border-radius: 4px; padding: 0.5rem 0.75rem; margin-top: 0.25rem; }
     @media (max-width: 480px) {
       .device-info { width: 100%; flex-basis: 100%; }
       .device-row .btn-row { width: 100%; }
@@ -45,16 +53,24 @@
     .share-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .share-meta { font-size: 0.78rem; color: #888; margin-top: 0.1rem; }
     .share-url  { font-size: 0.78rem; color: #5ab0ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .rename-input { width: 100%; box-sizing: border-box; padding: 0.25rem 0.4rem; background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; font-size: 0.875rem; margin-bottom: 0.3rem; }
   </style>
 </head>
 <body>
-  <h1>Subfin Device Manager</h1>
+  <h1 id="top">Subfin Device Manager</h1>
   <p class="subtitle" id="subtitle">Loading…</p>
+
+  <nav class="page-nav">
+    <a href="#linkCard">Link Device</a>
+    <a href="#devicesCard">Linked Devices</a>
+    <a href="#sharesCard">Shares</a>
+    <a href="#libraryCard">Library</a>
+  </nav>
 
   <div id="banner"></div>
 
-  <div class="card">
-    <h2>Link a New Device</h2>
+  <div class="card" id="linkCard">
+    <div class="h2-row"><h2>Link a New Device</h2><a class="top-link" href="#top">↑ top</a></div>
     <label for="deviceLabel">Device label (optional — e.g. "DSub on Phone")</label>
     <input type="text" id="deviceLabel" placeholder="My Phone">
     <div class="btn-row">
@@ -62,18 +78,18 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>Linked Devices</h2>
+  <div class="card" id="devicesCard">
+    <div class="h2-row"><h2>Linked Devices</h2><a class="top-link" href="#top">↑ top</a></div>
     <div id="deviceList"><p id="noDevices" style="display:none">No devices linked yet.</p></div>
   </div>
 
   <div class="card" id="sharesCard" style="display:none">
-    <h2 id="sharesTitle">Shares</h2>
+    <div class="h2-row"><h2 id="sharesTitle">Shares</h2><a class="top-link" href="#top">↑ top</a></div>
     <div id="sharesList"></div>
   </div>
 
   <div class="card" id="libraryCard" style="display:none">
-    <h2>Library Selection</h2>
+    <div class="h2-row"><h2>Library Selection</h2><a class="top-link" href="#top">↑ top</a></div>
     <p style="font-size:0.875rem;color:#aaa;margin:0 0 0.75rem">
       Choose which Jellyfin music libraries appear in Subsonic clients.
       Deselect all to show all libraries.
@@ -202,7 +218,6 @@
       const devices = await r.json();
 
       const list = document.getElementById('deviceList');
-      const none = document.getElementById('noDevices');
 
       if (!devices.length) {
         list.innerHTML = '<p id="noDevices">No devices linked yet.</p>';
@@ -237,7 +252,33 @@
       const r = await fetch(`/subfin/api/devices/${id}/reset-password`, { method: 'POST', headers: authHeaders() });
       const d = await r.json();
       if (!r.ok) { showBanner('Reset failed (' + r.status + ')', false); return; }
-      showCredentials(d.subsonicUsername, d.password, 'Password reset — update your Subsonic client.');
+
+      // Auto-copy new password to clipboard
+      navigator.clipboard.writeText(d.password).catch(() => {});
+
+      // Remove any previous inline creds for this device
+      document.getElementById(`creds-${id}`)?.remove();
+
+      // Inject creds inline inside the device row (full-width below info+buttons)
+      const row = document.getElementById(`device-${id}`);
+      if (row) {
+        const div = document.createElement('div');
+        div.className = 'device-creds';
+        div.id = `creds-${id}`;
+        div.innerHTML = `
+          <div class="cred-row">
+            <span class="cred-label">Username</span>
+            <span class="cred-value" onclick="copyText(this,'${escHtml(d.subsonicUsername)}')">${escHtml(d.subsonicUsername)}</span>
+            <button class="cred-copy" onclick="copyText(null,'${escHtml(d.subsonicUsername)}')">Copy</button>
+          </div>
+          <div class="cred-row">
+            <span class="cred-label">Password</span>
+            <span class="cred-value" onclick="copyText(this,'${escHtml(d.password)}')">${escHtml(d.password)}</span>
+            <button class="cred-copy" onclick="copyText(null,'${escHtml(d.password)}')">Copy</button>
+          </div>
+          <div class="cred-note">Update your Subsonic client. Password copied to clipboard. <a href="#" onclick="document.getElementById('creds-${id}')?.remove();return false;">Dismiss</a></div>`;
+        row.appendChild(div);
+      }
     }
 
     // ── Library selection ─────────────────────────────────────────────────────
@@ -308,13 +349,15 @@
         const expires = s.expires ? new Date(s.expires).toLocaleDateString() : 'never';
         const meta = `${admin ? 'by ' + escHtml(s.username || '') + ' · ' : ''}created ${created} · expires ${expires} · ${s.visitCount ?? 0} visit${s.visitCount !== 1 ? 's' : ''}`;
         const deleteEndpoint = admin ? `/subfin/api/admin/shares/${s.uid}` : `/subfin/api/shares/${s.uid}`;
+        const renameEndpoint = admin ? `/subfin/api/admin/shares/${s.uid}` : `/subfin/api/shares/${s.uid}`;
         return `<div class="share-row" id="share-${escHtml(s.uid)}">
           <div class="share-info">
-            <div class="share-desc">${escHtml(desc)}</div>
+            <div class="share-desc" id="share-desc-${escHtml(s.uid)}">${escHtml(desc)}</div>
             <div class="share-meta">${meta}</div>
             <div class="share-url" onclick="copyShareUrl('${escHtml(s.url)}')" title="Click to copy">${escHtml(s.url)}</div>
           </div>
           <div class="btn-row">
+            <button class="secondary" onclick="renameShare('${escHtml(s.uid)}','${escHtml(renameEndpoint)}',${escHtml(JSON.stringify(s.description || ''))})">Rename</button>
             <button class="danger" onclick="deleteShare('${escHtml(s.uid)}','${escHtml(deleteEndpoint)}')">Delete</button>
           </div>
         </div>`;
@@ -330,6 +373,39 @@
       const card = document.getElementById('sharesCard');
       if (!card.querySelector('.share-row'))
         document.getElementById('sharesList').innerHTML = '<p style="font-size:0.875rem;color:#888;margin:0.5rem 0">No shares.</p>';
+    }
+
+    function renameShare(uid, endpoint, currentDesc) {
+      const descEl = document.getElementById(`share-desc-${uid}`);
+      if (!descEl) return;
+      // Replace static text with inline editor
+      descEl.innerHTML = `
+        <input class="rename-input" id="rename-input-${escHtml(uid)}" type="text" value="${escHtml(currentDesc)}">
+        <div class="btn-row" style="margin-top:0.2rem">
+          <button style="padding:0.2rem 0.6rem;font-size:0.8rem" onclick="saveRename('${escHtml(uid)}','${escHtml(endpoint)}')">Save</button>
+          <button class="secondary" style="padding:0.2rem 0.6rem;font-size:0.8rem" onclick="cancelRename('${escHtml(uid)}',${JSON.stringify(currentDesc)})">Cancel</button>
+        </div>`;
+      const input = document.getElementById(`rename-input-${uid}`);
+      if (input) { input.focus(); input.select(); }
+    }
+
+    async function saveRename(uid, endpoint) {
+      const input = document.getElementById(`rename-input-${uid}`);
+      if (!input) return;
+      const newDesc = input.value.trim();
+      const r = await fetch(endpoint, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ description: newDesc }),
+      });
+      if (!r.ok) { showBanner('Rename failed (' + r.status + ')', false); return; }
+      const descEl = document.getElementById(`share-desc-${uid}`);
+      if (descEl) descEl.textContent = newDesc || '(no description)';
+    }
+
+    function cancelRename(uid, originalDesc) {
+      const descEl = document.getElementById(`share-desc-${uid}`);
+      if (descEl) descEl.textContent = originalDesc || '(no description)';
     }
 
     function copyShareUrl(url) {

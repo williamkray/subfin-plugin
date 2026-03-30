@@ -454,6 +454,18 @@ public static class SubsonicStore
         }
     }
 
+    public static void UpdateShareDescription(string shareUid, string? description)
+    {
+        lock (_lock)
+        {
+            using var cmd = Db.CreateCommand();
+            cmd.CommandText = "UPDATE shares SET description = @desc WHERE share_uid = @uid";
+            cmd.Parameters.AddWithValue("@desc", (object?)description ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@uid", shareUid);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public static void DeleteShare(string shareUid)
     {
         lock (_lock)
