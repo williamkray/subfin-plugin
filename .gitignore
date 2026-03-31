@@ -10,3 +10,4 @@ localenv/
 CLAUDE.md
 issues/
 localenv
+scripts/publish.sh
