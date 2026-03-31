@@ -1,0 +1,12 @@
+[
+  {
+    "category": "Music",
+    "description": "OpenSubsonic-to-Jellyfin compatibility layer. Use Subsonic/Navidrome clients (DSub, Substreamer, etc.) with your Jellyfin music library.",
+    "guid": "4a3b2c1d-e5f6-7890-abcd-ef1234567890",
+    "imageUrl": "https://raw.githubusercontent.com/williamkray/subfin-plugin/main/logo.png",
+    "name": "Subfin",
+    "overview": "Exposes an OpenSubsonic-compatible REST API at /rest/* so that Subsonic clients can browse and stream your Jellyfin music library.",
+    "owner": "williamkray",
+    "versions": []
+  }
+]
