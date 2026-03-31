@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <AssemblyName>Jellyfin.Plugin.Subsonic</AssemblyName>
+    <RootNamespace>Jellyfin.Plugin.Subsonic</RootNamespace>
+    <AssemblyVersion>10.11.5.3</AssemblyVersion>
+    <FileVersion>10.11.5.3</FileVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Optimize>true</Optimize>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Jellyfin.Plugin.Subsonic.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embed all Web/Views/*.html and Store/Schema.sql as resources -->
+    <EmbeddedResource Include="Web\Views\**\*.html" />
+    <EmbeddedResource Include="Store\Schema.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Jellyfin SDK references — provided by the host at runtime -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.6" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
+    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.6" />
+    <!-- SQLite -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Parse version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: dotnet publish -c Release Jellyfin.Plugin.Subsonic --nologo -v quiet
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "Changelog: commits since $PREV_TAG"
+            RAW_LOG=$(git log --oneline --no-merges "${PREV_TAG}..HEAD" 2>/dev/null || echo "")
+          else
+            echo "No previous tag; using last 20 commits"
+            RAW_LOG=$(git log --oneline --no-merges -20 2>/dev/null || echo "")
+          fi
+          # Store as multiline output
+          {
+            echo 'CHANGELOG<<EOF'
+            echo "$RAW_LOG"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Package ZIP
+        id: package
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PUBLISH="Jellyfin.Plugin.Subsonic/bin/Release/net9.0/publish"
+          WORK_DIR=$(mktemp -d)
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          ZIP_NAME="jellyfin-plugin-subfin_${VERSION}.zip"
+
+          # Read meta.json fields
+          GUID=$(jq -r '.guid' meta.json)
+          TARGET_ABI=$(jq -r '.targetAbi' meta.json)
+          DESCRIPTION=$(jq -r '.description' meta.json)
+          OVERVIEW=$(jq -r '.overview' meta.json)
+          OWNER=$(jq -r '.owner' meta.json)
+          CATEGORY=$(jq -r '.category' meta.json)
+          CHANGELOG="${{ steps.changelog.outputs.CHANGELOG }}"
+          IMAGE_URL="https://raw.githubusercontent.com/williamkray/subfin-plugin/main/logo.png"
+
+          # Write meta.json for the ZIP
+          jq -n \
+            --arg category "$CATEGORY" \
+            --arg changelog "$CHANGELOG" \
+            --arg description "$DESCRIPTION" \
+            --arg guid "$GUID" \
+            --arg imageUrl "$IMAGE_URL" \
+            --arg overview "$OVERVIEW" \
+            --arg owner "$OWNER" \
+            --arg targetAbi "$TARGET_ABI" \
+            --arg timestamp "$TIMESTAMP" \
+            --arg version "$VERSION" \
+            '{
+              category: $category,
+              changelog: $changelog,
+              description: $description,
+              guid: $guid,
+              imageUrl: $imageUrl,
+              name: "Subfin",
+              overview: $overview,
+              owner: $owner,
+              targetAbi: $targetAbi,
+              timestamp: $timestamp,
+              version: $version,
+              status: "Active",
+              autoUpdate: true,
+              assemblies: ["Jellyfin.Plugin.Subsonic.dll"]
+            }' > "$WORK_DIR/meta.json"
+
+          # Copy DLL and zip
+          cp "$PUBLISH/Jellyfin.Plugin.Subsonic.dll" "$WORK_DIR/"
+          (cd "$WORK_DIR" && zip -q "$ZIP_NAME" meta.json Jellyfin.Plugin.Subsonic.dll)
+
+          CHECKSUM=$(md5sum "$WORK_DIR/$ZIP_NAME" | awk '{print $1}')
+          echo "ZIP: $ZIP_NAME (MD5: $CHECKSUM)"
+
+          # Move ZIP to workspace root for upload
+          cp "$WORK_DIR/$ZIP_NAME" "./$ZIP_NAME"
+
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          echo "CHECKSUM=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ZIP_NAME="${{ steps.package.outputs.ZIP_NAME }}"
+          CHANGELOG="${{ steps.changelog.outputs.CHANGELOG }}"
+
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "$CHANGELOG" \
+            "$ZIP_NAME"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update manifest
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          CHECKSUM="${{ steps.package.outputs.CHECKSUM }}"
+          TIMESTAMP="${{ steps.package.outputs.TIMESTAMP }}"
+          CHANGELOG="${{ steps.changelog.outputs.CHANGELOG }}"
+          ZIP_NAME="${{ steps.package.outputs.ZIP_NAME }}"
+          IMAGE_URL="https://raw.githubusercontent.com/williamkray/subfin-plugin/main/logo.png"
+
+          # Read static fields from meta.json
+          GUID=$(jq -r '.guid' meta.json)
+          TARGET_ABI=$(jq -r '.targetAbi' meta.json)
+          DESCRIPTION=$(jq -r '.description' meta.json)
+          OVERVIEW=$(jq -r '.overview' meta.json)
+          OWNER=$(jq -r '.owner' meta.json)
+          CATEGORY=$(jq -r '.category' meta.json)
+          SOURCE_URL="https://github.com/williamkray/subfin-plugin/releases/download/v${VERSION}/${ZIP_NAME}"
+
+          NEW_ENTRY=$(jq -n \
+            --arg checksum "$CHECKSUM" \
+            --arg changelog "$CHANGELOG" \
+            --arg targetAbi "$TARGET_ABI" \
+            --arg sourceUrl "$SOURCE_URL" \
+            --arg timestamp "$TIMESTAMP" \
+            --arg version "$VERSION" \
+            '{checksum: $checksum, changelog: $changelog, targetAbi: $targetAbi, sourceUrl: $sourceUrl, timestamp: $timestamp, version: $version}')
+
+          # Load existing manifest versions, drop same version if re-releasing, prepend new entry
+          EXISTING_VERSIONS=$(jq -r '.[0].versions // []' jellyfin-plugin-subfin-manifest.json 2>/dev/null || echo "[]")
+          VERSIONS=$(echo "$EXISTING_VERSIONS" | jq \
+            --argjson new "$NEW_ENTRY" \
+            --arg ver "$VERSION" \
+            '[.[] | select(.version != $ver)] | [$new] + .')
+
+          jq -n \
+            --arg category "$CATEGORY" \
+            --arg description "$DESCRIPTION" \
+            --arg guid "$GUID" \
+            --arg imageUrl "$IMAGE_URL" \
+            --arg overview "$OVERVIEW" \
+            --arg owner "$OWNER" \
+            --argjson versions "$VERSIONS" \
+            '[{category: $category, description: $description, guid: $guid, imageUrl: $imageUrl, name: "Subfin", overview: $overview, owner: $owner, versions: $versions}]' \
+            > jellyfin-plugin-subfin-manifest.json
+
+          echo "Manifest updated."
+
+      - name: Commit updated manifest
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add jellyfin-plugin-subfin-manifest.json
+          git commit -m "release: update manifest for v${VERSION} [skip ci]"
+          git push origin HEAD:main
