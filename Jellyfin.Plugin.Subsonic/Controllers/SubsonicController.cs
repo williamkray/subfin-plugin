@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -52,6 +53,7 @@ public class SubsonicController : ControllerBase
     private readonly IAuthenticationManager _authManager;
     private readonly ILyricManager _lyricManager;
     private readonly ILogger<SubsonicController> _logger;
+    private static readonly ConcurrentDictionary<string, byte> _refreshInProgress = new();
 
     public SubsonicController(
         SubsonicAuth auth,
@@ -149,9 +151,9 @@ public class SubsonicController : ControllerBase
             "search3" or "search2" => Search3(auth, user, p, format),
             "getalbumlist" => GetAlbumList(auth, user, p, format, false),
             "getalbumlist2" => GetAlbumList(auth, user, p, format, true),
-            "getrandomsongs" => GetRandomSongs(user, p, format),
-            "getgenres" => GetGenres(user, format),
-            "getsongsbygenre" => GetSongsByGenre(user, p, format),
+            "getrandomsongs" => GetRandomSongs(auth, user, p, format),
+            "getgenres" => GetGenres(auth, user, p, format),
+            "getsongsbygenre" => GetSongsByGenre(auth, user, p, format),
             "getplaylists" => GetPlaylists(user, format),
             "getplaylist" => GetPlaylist(user, p, format),
             "createplaylist" => await CreatePlaylist(user, p, format),
@@ -261,25 +263,19 @@ public class SubsonicController : ControllerBase
     {
         var folderIds = GetEffectiveFolderIds(auth, musicFolderId);
         var cacheKey = $"artistIndex:{auth.JellyfinUserId}:{(folderIds == null ? "all" : string.Join(",", folderIds.OrderBy(x => x)))}";
-        const int TtlMs = 15 * 60 * 1000;
+        const long TtlMs = 15L * 60 * 1000;
 
-        var cached = SubsonicStore.GetDerivedCache(cacheKey);
-        if (cached != null)
-        {
-            var ageMs = (DateTimeOffset.UtcNow - DateTimeOffset.Parse(cached.CachedAt)).TotalMilliseconds;
-            if (ageMs < TtlMs)
-            {
-                var parsed = JsonSerializer.Deserialize<List<ArtistCacheEntry>>(cached.ValueJson) ?? [];
-                return GroupByLetter(parsed.Select(a => (a.Id, a.Name, a.AlbumCount)));
-            }
-        }
+        var entries = GetOrRefreshCache(
+            cacheKey, TtlMs,
+            build: () => BuildArtistList(user, folderIds).Select(a => new ArtistCacheEntry(a.Id, a.Name, a.AlbumCount)).ToList(),
+            deserialize: json => JsonSerializer.Deserialize<List<ArtistCacheEntry>>(json),
+            serialize: v => JsonSerializer.Serialize(v));
 
-        var artists = BuildArtistList(user, folderIds);
-        SubsonicStore.SetDerivedCache(cacheKey, JsonSerializer.Serialize(artists.Select(a => new ArtistCacheEntry(a.Id, a.Name, a.AlbumCount))), null);
-        return GroupByLetter(artists);
+        return GroupByLetter(entries.Select(a => (a.Id, a.Name, a.AlbumCount)));
     }
 
     private record ArtistCacheEntry(string Id, string Name, int AlbumCount);
+    private record GenreCacheEntry(string Name, int SongCount, int AlbumCount);
 
     private static readonly Regex _artistKeyRegex = new(@"[\s._/*'""\-]+", RegexOptions.Compiled);
     private static string CanonicalArtistKey(string name)
@@ -600,30 +596,18 @@ public class SubsonicController : ControllerBase
         if (type == "recent")
         {
             var recentFolderIds = GetEffectiveFolderIds(auth, p.MusicFolderId);
+            var folderSuffix = recentFolderIds == null ? "all" : string.Join(",", recentFolderIds.OrderBy(x => x));
+            var cacheKey = $"albumListRecent:{auth.JellyfinUserId}:{folderSuffix}:{size}:{offset}";
+            const long RecentTtlMs = 5L * 60 * 1000;
 
-            // Jellyfin only sets LastPlayedDate on Audio (track) entities, not MusicAlbum.
-            // Derive recently-played album order from track play history instead.
-            var trackLimit = Math.Max(200, (offset + size) * 10);
-            var trackQuery = new InternalItemsQuery(user)
-            {
-                IncludeItemTypes = [BaseItemKind.Audio],
-                OrderBy = [(ItemSortBy.DatePlayed, SortOrder.Descending)],
-                Limit = trackLimit,
-                Recursive = true,
-            };
-            ApplyFolderScoping(trackQuery, recentFolderIds);
+            var albumGuids = GetOrRefreshCache(
+                cacheKey, RecentTtlMs,
+                build: () => BuildRecentAlbumIds(user, recentFolderIds, offset, size),
+                deserialize: json => JsonSerializer.Deserialize<List<string>>(json),
+                serialize: v => JsonSerializer.Serialize(v));
 
-            var seenAlbums = new HashSet<Guid>();
-            var albumIds = new List<Guid>();
-            foreach (var track in _library.GetItemList(trackQuery).OfType<Audio>())
-            {
-                if (track.ParentId != Guid.Empty && seenAlbums.Add(track.ParentId))
-                    albumIds.Add(track.ParentId);
-            }
-            var pageIds = albumIds.Skip(offset).Take(size).ToList();
-
-            var recentAlbums = pageIds
-                .Select(id => _library.GetItemById<MusicAlbum>(id))
+            var recentAlbums = albumGuids
+                .Select(id => _library.GetItemById<MusicAlbum>(Guid.ParseExact(id, "N")))
                 .Where(a => a != null)
                 .Cast<MusicAlbum>()
                 .Select(ToAlbumWithArtist)
@@ -676,16 +660,18 @@ public class SubsonicController : ControllerBase
 
     // ── getRandomSongs ───────────────────────────────────────────────────────
 
-    private IActionResult GetRandomSongs(User user, QueryParams p, string format)
+    private IActionResult GetRandomSongs(AuthResult auth, User user, QueryParams p, string format)
     {
         var size = Math.Min(p.GetInt("size", 10), 500);
-        var songs = _library.GetItemList(new InternalItemsQuery(user)
+        var query = new InternalItemsQuery(user)
         {
             IncludeItemTypes = [BaseItemKind.Audio],
             OrderBy = [(ItemSortBy.Random, SortOrder.Ascending)],
             Limit = size,
             Recursive = true,
-        }).OfType<Audio>().Select(ToSongWithArtist).ToList();
+        };
+        ApplyFolderScoping(query, GetEffectiveFolderIds(auth, p.MusicFolderId));
+        var songs = _library.GetItemList(query).OfType<Audio>().Select(ToSongWithArtist).ToList();
 
         var json = SubsonicEnvelope.Ok(new() { ["randomSongs"] = new Dictionary<string, object> { ["song"] = songs } });
         return Respond(format, json, XmlBuilder.RandomSongs(songs));
@@ -693,53 +679,69 @@ public class SubsonicController : ControllerBase
 
     // ── getGenres ────────────────────────────────────────────────────────────
 
-    private IActionResult GetGenres(User user, string format)
+    private IActionResult GetGenres(AuthResult auth, User user, QueryParams p, string format)
     {
-        var genreResult = _library.GetGenres(new InternalItemsQuery(user));
-        var genres = genreResult.Items.Select(g =>
-        {
-            var name = g.Item1.Name ?? "";
-            var songCount = _library.GetCount(new InternalItemsQuery(user)
-            {
-                Genres = new List<string> { name },
-                IncludeItemTypes = [BaseItemKind.Audio],
-                Recursive = true,
-            });
-            var albumCount = _library.GetCount(new InternalItemsQuery(user)
-            {
-                Genres = new List<string> { name },
-                IncludeItemTypes = [BaseItemKind.MusicAlbum],
-                Recursive = true,
-            });
-            return (name, songCount, albumCount);
-        }).ToList();
+        var folderIds = GetEffectiveFolderIds(auth, p.MusicFolderId);
+        var folderSuffix = folderIds == null ? "all" : string.Join(",", folderIds.OrderBy(x => x));
+        var cacheKey = $"genres:{auth.JellyfinUserId}:{folderSuffix}";
+        const long TtlMs = 30L * 60 * 1000;
 
-        var json = SubsonicEnvelope.Ok(new()
+        var cached = GetOrRefreshCache(
+            cacheKey, TtlMs,
+            build: () =>
+            {
+                var genreResult = _library.GetGenres(new InternalItemsQuery(user));
+                return genreResult.Items.Select(g =>
+                {
+                    var name = g.Item1.Name ?? "";
+                    var songCount = _library.GetCount(new InternalItemsQuery(user)
+                    {
+                        Genres = new List<string> { name },
+                        IncludeItemTypes = [BaseItemKind.Audio],
+                        Recursive = true,
+                    });
+                    var albumCount = _library.GetCount(new InternalItemsQuery(user)
+                    {
+                        Genres = new List<string> { name },
+                        IncludeItemTypes = [BaseItemKind.MusicAlbum],
+                        Recursive = true,
+                    });
+                    return new GenreCacheEntry(name, songCount, albumCount);
+                }).ToList();
+            },
+            deserialize: json => JsonSerializer.Deserialize<List<GenreCacheEntry>>(json),
+            serialize: v => JsonSerializer.Serialize(v));
+
+        var genres = cached.Select(g => (g.Name, g.SongCount, g.AlbumCount)).ToList();
+
+        var jsonObj = SubsonicEnvelope.Ok(new()
         {
             ["genres"] = new Dictionary<string, object>
             {
-                ["genre"] = genres.Select(g => new Dictionary<string, object> { ["value"] = g.name, ["songCount"] = g.songCount, ["albumCount"] = g.albumCount }).ToList()
+                ["genre"] = genres.Select(g => new Dictionary<string, object> { ["value"] = g.Name, ["songCount"] = g.SongCount, ["albumCount"] = g.AlbumCount }).ToList()
             }
         });
-        return Respond(format, json, XmlBuilder.Genres(genres));
+        return Respond(format, jsonObj, XmlBuilder.Genres(genres));
     }
 
     // ── getSongsByGenre ──────────────────────────────────────────────────────
 
-    private IActionResult GetSongsByGenre(User user, QueryParams p, string format)
+    private IActionResult GetSongsByGenre(AuthResult auth, User user, QueryParams p, string format)
     {
         var genre = p.Get("genre") ?? "";
         var count = Math.Min(p.GetInt("count", 10), 500);
         var offset = p.GetInt("offset", 0);
 
-        var songs = _library.GetItemList(new InternalItemsQuery(user)
+        var query = new InternalItemsQuery(user)
         {
             Genres = new List<string> { genre },
             IncludeItemTypes = [BaseItemKind.Audio],
             Limit = count,
             StartIndex = offset,
             Recursive = true,
-        }).OfType<Audio>().Select(ToSongWithArtist).ToList();
+        };
+        ApplyFolderScoping(query, GetEffectiveFolderIds(auth, p.MusicFolderId));
+        var songs = _library.GetItemList(query).OfType<Audio>().Select(ToSongWithArtist).ToList();
 
         var json = SubsonicEnvelope.Ok(new() { ["songsByGenre"] = new Dictionary<string, object> { ["song"] = songs } });
         return Respond(format, json, XmlBuilder.SongsByGenre(songs));
@@ -1786,11 +1788,87 @@ public class SubsonicController : ControllerBase
     private IActionResult GetAvatar(User user) =>
         Redirect($"/Users/{user.Id}/Images/Primary");
 
+    // ── Cache helpers ────────────────────────────────────────────────────────
+
+    // Stale-while-revalidate cache helper.
+    // fresh hit (ageMs < ttl) → return deserialized value immediately
+    // stale hit (ageMs >= ttl) → return stale value + fire background rebuild
+    // miss                     → build synchronously, cache, return
+    private T GetOrRefreshCache<T>(
+        string cacheKey, long ttlMs,
+        Func<T> build,
+        Func<string, T?> deserialize,
+        Func<T, string> serialize)
+        where T : class
+    {
+        var cached = SubsonicStore.GetDerivedCache(cacheKey);
+        if (cached != null)
+        {
+            var ageMs = (DateTimeOffset.UtcNow - DateTimeOffset.Parse(cached.CachedAt)).TotalMilliseconds;
+            var value = deserialize(cached.ValueJson);
+            if (value != null)
+            {
+                if (ageMs >= ttlMs)
+                    FireBackgroundRefresh(cacheKey, build, serialize);
+                return value;
+            }
+        }
+        var built = build();
+        SubsonicStore.SetDerivedCache(cacheKey, serialize(built), null);
+        return built;
+    }
+
+    private void FireBackgroundRefresh<T>(string cacheKey, Func<T> build, Func<T, string> serialize) where T : class
+    {
+        if (!_refreshInProgress.TryAdd(cacheKey, 0)) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var v = build();
+                SubsonicStore.SetDerivedCache(cacheKey, serialize(v), null);
+                _logger.LogInformation("[Subfin] BG cache refresh done: {Key}", cacheKey);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Subfin] BG cache refresh failed: {Key}", cacheKey);
+            }
+            finally
+            {
+                _refreshInProgress.TryRemove(cacheKey, out _);
+            }
+        });
+    }
+
+    // Jellyfin only sets LastPlayedDate on Audio (track) entities, not MusicAlbum.
+    // Derive recently-played album order from track play history; returns album GUIDs (N-format).
+    private List<string> BuildRecentAlbumIds(User user, List<string>? folderIds, int offset, int size)
+    {
+        var trackLimit = Math.Max(200, (offset + size) * 10);
+        var trackQuery = new InternalItemsQuery(user)
+        {
+            IncludeItemTypes = [BaseItemKind.Audio],
+            OrderBy = [(ItemSortBy.DatePlayed, SortOrder.Descending)],
+            Limit = trackLimit,
+            Recursive = true,
+        };
+        ApplyFolderScoping(trackQuery, folderIds);
+
+        var seenAlbums = new HashSet<Guid>();
+        var albumIds = new List<Guid>();
+        foreach (var track in _library.GetItemList(trackQuery).OfType<Audio>())
+        {
+            if (track.ParentId != Guid.Empty && seenAlbums.Add(track.ParentId))
+                albumIds.Add(track.ParentId);
+        }
+        return albumIds.Skip(offset).Take(size).Select(id => id.ToString("N")).ToList();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     // Converts a Jellyfin music folder GUID string to a stable positive integer for JSON responses.
     // subsonic-kotlin (Navic) types MusicFolder.id as Int, not String.
-    private static int FolderIdToInt(string guidStr) =>
+    internal static int FolderIdToInt(string guidStr) =>
         (int)(BitConverter.ToUInt32(Guid.Parse(guidStr).ToByteArray(), 0) & 0x7FFFFFFF);
 
     // Returns false and sets error if id is null/empty or fails Guid parse; sets guid on success.

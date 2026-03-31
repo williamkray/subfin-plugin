@@ -93,6 +93,72 @@ public class XmlBuilderTests
     }
 
     [Fact]
+    public void AlbumList_UsesAttributes()
+    {
+        var albums = new List<Dictionary<string, object?>>
+        {
+            new() { ["id"] = "al-guid1", ["name"] = "Abbey Road", ["artist"] = "The Beatles" }
+        };
+        var xml = XmlBuilder.AlbumList(albums);
+        var doc = Parse(xml);
+        var root = doc.DocumentElement!;
+        var list = root["albumList", "http://subsonic.org/restapi"]!;
+        var album = (XmlElement)list.ChildNodes[0]!;
+        Assert.Equal("al-guid1", album.GetAttribute("id"));
+        Assert.Equal("Abbey Road", album.GetAttribute("name"));
+        // Must be attributes, not child elements
+        Assert.Null(album["id"]);
+        Assert.Null(album["name"]);
+    }
+
+    [Fact]
+    public void Playlists_UsesAttributes()
+    {
+        var playlists = new List<Dictionary<string, object?>>
+        {
+            new() { ["id"] = "pl-guid1", ["name"] = "My Mix", ["songCount"] = 5 }
+        };
+        var xml = XmlBuilder.Playlists(playlists);
+        var doc = Parse(xml);
+        var root = doc.DocumentElement!;
+        var pls = root["playlists", "http://subsonic.org/restapi"]!;
+        var pl = (XmlElement)pls.ChildNodes[0]!;
+        Assert.Equal("pl-guid1", pl.GetAttribute("id"));
+        Assert.Equal("My Mix", pl.GetAttribute("name"));
+        Assert.Null(pl["id"]);
+        Assert.Null(pl["name"]);
+    }
+
+    [Fact]
+    public void Song_HasMediaType()
+    {
+        var song = new Dictionary<string, object?>
+        {
+            ["id"] = "abc", ["title"] = "Track", ["mediaType"] = "song"
+        };
+        var xml = XmlBuilder.Song(song);
+        var doc = Parse(xml);
+        var root = doc.DocumentElement!;
+        var s = root["song", "http://subsonic.org/restapi"]!;
+        Assert.Equal("song", s.GetAttribute("mediaType"));
+    }
+
+    [Fact]
+    public void SearchResult3_Structure()
+    {
+        var artists = new List<Dictionary<string, object?>> { new() { ["id"] = "ar-1", ["name"] = "Artist" } };
+        var albums = new List<Dictionary<string, object?>> { new() { ["id"] = "al-1", ["name"] = "Album" } };
+        var songs = new List<Dictionary<string, object?>> { new() { ["id"] = "s-1", ["title"] = "Song", ["mediaType"] = "song" } };
+        var xml = XmlBuilder.SearchResult3(artists, albums, songs);
+        var doc = Parse(xml);
+        var root = doc.DocumentElement!;
+        var sr3 = root["searchResult3", "http://subsonic.org/restapi"]!;
+        Assert.NotNull(sr3["artist", "http://subsonic.org/restapi"]);
+        Assert.NotNull(sr3["album", "http://subsonic.org/restapi"]);
+        Assert.NotNull(sr3["song", "http://subsonic.org/restapi"]);
+    }
+
+    [Fact]
     public void Share_AlwaysHasVisitCountAndExpires()
     {
         var share = new ShareXml(

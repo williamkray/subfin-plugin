@@ -118,7 +118,7 @@ public class SubsonicAuth
         return new AuthResult(u, matched.JellyfinUserId, dId, dName);
     }
 
-    private static string? DecodePassword(string p)
+    internal static string? DecodePassword(string p)
     {
         if (string.IsNullOrEmpty(p)) return null;
         if (p.StartsWith("enc:", StringComparison.Ordinal))
@@ -129,7 +129,7 @@ public class SubsonicAuth
         return p;
     }
 
-    private static string ComputeToken(string password, string salt)
+    internal static string ComputeToken(string password, string salt)
     {
         var input = Encoding.UTF8.GetBytes(password + salt);
         return Convert.ToHexString(MD5.HashData(input)).ToLowerInvariant();

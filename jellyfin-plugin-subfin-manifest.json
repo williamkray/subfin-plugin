@@ -9,6 +9,30 @@
     "owner": "williamkray",
     "versions": [
       {
+        "checksum": "46693d5739b0bb9177d9b196e70f8ea7",
+        "changelog": "c3fff97 v10.11.5.2: Fix share rename Cancel button (escHtml on JSON.stringify)",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://home.kray.pw/jellyfin-plugin-subfin_10.11.5.3.zip",
+        "timestamp": "2026-03-30T19:40:46Z",
+        "version": "10.11.5.3"
+      },
+      {
+        "checksum": "b7d3039403707ff29d5faf6ef48e4b61",
+        "changelog": "",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://home.kray.pw/jellyfin-plugin-subfin_10.11.5.2.zip",
+        "timestamp": "2026-03-30T05:08:39Z",
+        "version": "10.11.5.2"
+      },
+      {
+        "checksum": "0c6137d930e31c8a9bdb659f39d9da51",
+        "changelog": "0072136 v10.11.5.1: Web UI usability improvements + share rename\ne0f5959 v10.11.5.0: Full lyrics support (getLyrics + getLyricsBySongId)",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://home.kray.pw/jellyfin-plugin-subfin_10.11.5.1.zip",
+        "timestamp": "2026-03-30T03:57:26Z",
+        "version": "10.11.5.1"
+      },
+      {
         "checksum": "a714a28a2780944afdcb63d9567f373e",
         "changelog": "0ad9350 add lyrics support\n00d6602 lots of cleanup",
         "targetAbi": "10.11.0.0",

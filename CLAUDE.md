@@ -237,6 +237,8 @@ Guid.TryParse(userIdStr, out var userId);
 var user = _userManager.GetUserById(userId);
 ```
 
+**`innerHTML` escaping rule:** Every JS value interpolated into an HTML attribute string must be HTML-escaped. `JSON.stringify` produces double-quoted strings that break `onclick="..."` attributes — always use `escHtml(JSON.stringify(value))`, not bare `JSON.stringify(value)`. This applies to every template in a call chain — audit nested HTML-generating functions separately.
+
 **JSON casing gotcha:** Jellyfin serializes JSON with the property names as written in C#.
 - Named types (records, classes) → PascalCase (`Id`, `DeviceLabel`, `CreatedAt`)
 - Anonymous objects → camelCase as written (`deviceId`, `subsonicUsername`, `password`)
