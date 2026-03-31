@@ -7,6 +7,15 @@
     "name": "Subfin",
     "overview": "Exposes an OpenSubsonic-compatible REST API at /rest/* so that Subsonic clients can browse and stream your Jellyfin music library.",
     "owner": "williamkray",
-    "versions": []
+    "versions": [
+      {
+        "checksum": "e8f301b7034020dff0f41299d985767d",
+        "changelog": "d7ad501 release: bump to v10.11.5.4\n5276305 Initial commit: Subfin Jellyfin plugin v10.11.5.3",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/williamkray/subfin-plugin/releases/download/v10.11.5.4/jellyfin-plugin-subfin_10.11.5.4.zip",
+        "timestamp": "2026-03-31T05:36:04Z",
+        "version": "10.11.5.4"
+      }
+    ]
   }
 ]
