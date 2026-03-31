@@ -7,5 +7,6 @@ localenv/
 *.db-wal
 *.db-shm
 .claude/
+CLAUDE.md
 issues/
 localenv
