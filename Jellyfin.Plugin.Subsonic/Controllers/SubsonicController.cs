@@ -19,6 +19,7 @@ using Jellyfin.Plugin.Subsonic.Auth;
 using Jellyfin.Plugin.Subsonic.Mappers;
 using Jellyfin.Plugin.Subsonic.Response;
 using Jellyfin.Plugin.Subsonic.Store;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
@@ -53,6 +54,7 @@ public class SubsonicController : ControllerBase
     private readonly IMusicManager _musicManager;
     private readonly IAuthenticationManager _authManager;
     private readonly ILyricManager _lyricManager;
+    private readonly IServerApplicationHost _appHost;
     private readonly ILogger<SubsonicController> _logger;
     private static readonly ConcurrentDictionary<string, byte> _refreshInProgress = new();
 
@@ -67,6 +69,7 @@ public class SubsonicController : ControllerBase
         IMusicManager musicManager,
         IAuthenticationManager authManager,
         ILyricManager lyricManager,
+        IServerApplicationHost appHost,
         ILogger<SubsonicController> logger)
     {
         _auth = auth;
@@ -79,6 +82,7 @@ public class SubsonicController : ControllerBase
         _musicManager = musicManager;
         _authManager = authManager;
         _lyricManager = lyricManager;
+        _appHost = appHost;
         _logger = logger;
     }
 
@@ -1102,7 +1106,7 @@ public class SubsonicController : ControllerBase
     private IActionResult GetShares(AuthResult auth, User user, string format)
     {
         var shares = SubsonicStore.GetSharesForJellyfinUser(auth.JellyfinUserId);
-        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        var baseUrl = Urls.PublicBase(Request);
         var xmlShares = shares.Select(s => BuildShareXml(s, baseUrl, user)).ToList();
         var json = SubsonicEnvelope.Ok(new() { ["shares"] = new Dictionary<string, object> { ["share"] = xmlShares.Select(ShareToJson).ToList() } });
         return Respond(format, json, XmlBuilder.Shares(xmlShares));
@@ -1130,7 +1134,7 @@ public class SubsonicController : ControllerBase
         var uid = SubsonicStore.InsertShare(device.Id, ids, flatIds, desc, expiresAt, secret);
 
         var share = SubsonicStore.GetShare(uid)!;
-        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        var baseUrl = Urls.PublicBase(Request);
         var xmlShare = BuildShareXml(share, baseUrl, user);
         var json = SubsonicEnvelope.Ok(new() { ["shares"] = new Dictionary<string, object> { ["share"] = new[] { ShareToJson(xmlShare) } } });
         return Respond(format, json, XmlBuilder.ShareCreated(xmlShare));
@@ -1315,7 +1319,7 @@ public class SubsonicController : ControllerBase
 
         // Build the artist image URL pointing to Jellyfin's image endpoint.
         // Jellyfin stores artist images on the scanned entity; this URL serves it directly.
-        var artistImageUrl = $"{Request.Scheme}://{Request.Host}/Items/{artist.Id:N}/Images/Primary";
+        var artistImageUrl = $"{Urls.PublicBase(Request)}/Items/{artist.Id:N}/Images/Primary";
 
         var jsonKey = v2 ? "artistInfo2" : "artistInfo";
         var jsonInfo = new Dictionary<string, object>
@@ -1718,7 +1722,10 @@ public class SubsonicController : ControllerBase
         if (bitRate > 0) qs += $"&audioBitRate={bitRate * 1000}";
         if (timeOff > 0) qs += $"&startTimeTicks={(long)timeOff * 10_000_000L}";
 
-        var url = $"{Request.Scheme}://{Request.Host}/Audio/{guid:N}/stream.{container}?{qs}";
+        // Call Jellyfin on its own loopback URL (BaseUrl included), never the client-facing host:
+        // behind a reverse proxy, a mapped port or a public hostname the server may not be able
+        // to reach itself at the address the client used.
+        var url = $"{_appHost.GetApiUrlForLocalAccess(allowHttps: false).TrimEnd('/')}/Audio/{guid:N}/stream.{container}?{qs}";
         _logger.LogInformation("[Subfin] stream proxy → {Url}", url);
         var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.TryAddWithoutValidation("Authorization", $"MediaBrowser Token=\"{apiKey}\"");
@@ -1765,11 +1772,11 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return BadRequest();
         if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return NotFound();
-        return Redirect($"/Items/{guid:N}/Images/Primary");
+        return Redirect($"{Urls.BasePath(Request)}/Items/{guid:N}/Images/Primary");
     }
 
     private IActionResult GetAvatar(User user) =>
-        Redirect($"/Users/{user.Id}/Images/Primary");
+        Redirect($"{Urls.BasePath(Request)}/Users/{user.Id}/Images/Primary");
 
     // ── Cache helpers ────────────────────────────────────────────────────────
 
