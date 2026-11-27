@@ -213,7 +213,7 @@ public class SubsonicController : ControllerBase
     /// </summary>
     private string? ResolveArtistTagId(string? name) =>
         string.IsNullOrEmpty(name) ? null :
-        _library.GetArtist(name) is MusicArtist a ? $"ar-{a.Id:N}" : null;
+        _library.GetArtist(name) is MusicArtist a ? a.Id.ToString("N") : null;   // bare id, same as getArtists
 
     // ── Response helper ──────────────────────────────────────────────────────
 
@@ -1306,7 +1306,7 @@ public class SubsonicController : ControllerBase
                 if (similar == null) continue;
                 similarArtistDicts.Add(new Dictionary<string, object?>
                 {
-                    ["id"] = $"ar-{similar.Id:N}",
+                    ["id"] = similar.Id.ToString("N"),
                     ["name"] = similar.Name ?? name,
                     ["albumCount"] = 0,
                 });
@@ -1354,7 +1354,8 @@ public class SubsonicController : ControllerBase
         var mbidResult = info?.Mbid ?? mbid;
         var url = info?.Url;
 
-        var jsonKey = v2 ? "albumInfo2" : "albumInfo";
+        // Spec: getAlbumInfo2 returns <albumInfo> (unlike getArtistInfo2, which returns <artistInfo2>)
+        const string jsonKey = "albumInfo";
         var jsonInfo = new Dictionary<string, object>();
         if (notes != null) jsonInfo["notes"] = notes;
         if (mbidResult != null) jsonInfo["musicBrainzId"] = mbidResult;
@@ -1407,7 +1408,7 @@ public class SubsonicController : ControllerBase
             OrderBy = [(ItemSortBy.PlayCount, SortOrder.Descending)],
             Limit = count,
             Recursive = true,
-        }).OfType<Audio>().Select(a => ItemMapper.ToSong(a, artistId: $"ar-{tagArtist.Id:N}")).ToList();
+        }).OfType<Audio>().Select(a => ItemMapper.ToSong(a, artistId: tagArtist.Id.ToString("N"))).ToList();
 
         var json = SubsonicEnvelope.Ok(new() { ["topSongs"] = new Dictionary<string, object> { ["song"] = songs } });
         return Respond(format, json, XmlBuilder.TopSongs(songs));

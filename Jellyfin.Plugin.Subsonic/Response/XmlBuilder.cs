@@ -446,7 +446,8 @@ public static class XmlBuilder
 
     public static string AlbumInfo(string? notes, string? musicBrainzId, string? lastFmUrl, bool v2 = false) => OkEnvelope(w =>
     {
-        w.WriteStartElement(v2 ? "albumInfo2" : "albumInfo", Ns);
+        // Spec: both getAlbumInfo and getAlbumInfo2 return <albumInfo>
+        w.WriteStartElement("albumInfo", Ns);
         if (!string.IsNullOrEmpty(musicBrainzId)) w.WriteAttributeString("musicBrainzId", musicBrainzId);
         if (!string.IsNullOrEmpty(lastFmUrl)) w.WriteAttributeString("lastFmUrl", lastFmUrl);
         if (!string.IsNullOrEmpty(notes)) { w.WriteStartElement("notes", Ns); w.WriteString(notes); w.WriteEndElement(); }

@@ -54,7 +54,7 @@ public static class ItemMapper
     public static Dictionary<string, object?> ToArtistWithAlbums(MusicArtist artist, IEnumerable<MusicAlbum> albums)
     {
         var albumList = albums.ToList();
-        var artistId = $"ar-{artist.Id:N}";
+        var artistId = artist.Id.ToString("N");   // bare id, same as getArtists
         return new()
         {
             ["id"] = artist.Id.ToString("N"),
