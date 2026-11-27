@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    tags-ignore: ['**']        # tags are handled by release.yml
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build + test (Jellyfin ${{ matrix.jellyfin }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - jellyfin: '10.11'
+            dotnet: '9.0.x'
+          - jellyfin: '12'
+            dotnet: '10.0.x'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: Build
+        run: dotnet build -c Release -p:JellyfinTarget=${{ matrix.jellyfin }} --nologo -warnaserror
+
+      - name: Test
+        run: dotnet test -c Release -p:JellyfinTarget=${{ matrix.jellyfin }} --nologo --no-build
