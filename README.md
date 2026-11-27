@@ -17,6 +17,21 @@ dotnet build -p:JellyfinTarget=12         # Jellyfin 12.x (.NET 10 SDK required)
 dotnet test  -p:JellyfinTarget=12
 ```
 
+### Integration tests
+
+`tests/integration/` starts a throwaway Jellyfin (Docker) with the plugin and a generated,
+copyright-free fixture library (multi-disc album, loose files, two libraries, a restricted
+user), then checks endpoint behaviour, security scoping and streaming. CI runs it against
+the latest Jellyfin 10.11 and 12 images.
+
+```bash
+dotnet publish -c Release Jellyfin.Plugin.Subsonic
+tests/integration/setup-jellyfin.sh jellyfin/jellyfin:10.11 \
+  Jellyfin.Plugin.Subsonic/bin/Release/net9.0/publish/Jellyfin.Plugin.Subsonic.dll 10.11.5.7 10.11.0.0
+tests/integration/checks.sh            # requires curl, jq, ffmpeg
+docker rm -f subfin-it
+```
+
 ## Installation
 
 1. In Jellyfin, go to **Dashboard → Plugins → Repositories** and add:

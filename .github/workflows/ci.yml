@@ -37,3 +37,49 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release -p:JellyfinTarget=${{ matrix.jellyfin }} --nologo --no-build
+
+  integration:
+    name: Integration (Jellyfin ${{ matrix.image }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Floating tags on purpose: a new Jellyfin release that breaks the plugin fails CI.
+          - jellyfin: '10.11'
+            dotnet: '9.0.x'
+            tfm: net9.0
+            abi: '10.11'
+            image: jellyfin/jellyfin:10.11
+          - jellyfin: '12'
+            dotnet: '10.0.x'
+            tfm: net10.0
+            abi: '12.0'
+            image: jellyfin/jellyfin:12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Publish plugin
+        run: dotnet publish -c Release Jellyfin.Plugin.Subsonic -p:JellyfinTarget=${{ matrix.jellyfin }} --nologo -v quiet
+
+      - name: Start Jellyfin with fixture library
+        run: |
+          SUBFIN_VERSION=$(sed -n 's|.*<SubfinVersion>\(.*\)</SubfinVersion>.*|\1|p' Jellyfin.Plugin.Subsonic/Jellyfin.Plugin.Subsonic.csproj)
+          tests/integration/setup-jellyfin.sh "${{ matrix.image }}" \
+            "Jellyfin.Plugin.Subsonic/bin/Release/${{ matrix.tfm }}/publish/Jellyfin.Plugin.Subsonic.dll" \
+            "${{ matrix.abi }}.${SUBFIN_VERSION}" "${{ matrix.abi }}.0.0"
+
+      - name: Integration checks
+        run: tests/integration/checks.sh
+
+      - name: Jellyfin logs
+        if: failure()
+        run: docker logs subfin-it 2>&1 | tail -200
