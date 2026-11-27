@@ -9,6 +9,22 @@
     "owner": "williamkray",
     "versions": [
       {
+        "checksum": "200139312a921e0464e2b96085d879cd",
+        "changelog": "4acf122 release: bump to v10.11.6.0\n3568981 fix: harden stream proxy, release pipeline and integration checks\nd6130ee test: Docker-based integration tests for Jellyfin 10.11 and 12 in CI\n6a109e2 fix: multi-disc albums came back empty; cover art for loose songs (resolves #4)\n7ebcce3 feat: shuffle, previous and next controls in the share web player (resolves #7)\n30eac8a fix: getAlbumInfo2 element name; artistId matches getArtists ids (resolves #6)\nb526548 fix: seeking and maxBitRate ignored on transcoded streams (resolves #5)\n9ae3c55 fix: transcode via Jellyfin's local URL; honour Jellyfin BaseUrl\nc1f6b15 ci: build and test both Jellyfin lines on every push and PR\nf42711d feat: build for Jellyfin 10.11 and 12.x from one source (resolves #3)\n1aa0c38 fix(security): scope share logins, enforce library access and ownership\n0d876e2 release: update manifest for v10.11.5.7 [skip ci]",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/williamkray/subfin-plugin/releases/download/v10.11.6.0/jellyfin-plugin-subfin_12.0.6.0.zip",
+        "timestamp": "2026-11-27T19:41:10Z",
+        "version": "12.0.6.0"
+      },
+      {
+        "checksum": "df5207f9257acc312d01056d99992031",
+        "changelog": "4acf122 release: bump to v10.11.6.0\n3568981 fix: harden stream proxy, release pipeline and integration checks\nd6130ee test: Docker-based integration tests for Jellyfin 10.11 and 12 in CI\n6a109e2 fix: multi-disc albums came back empty; cover art for loose songs (resolves #4)\n7ebcce3 feat: shuffle, previous and next controls in the share web player (resolves #7)\n30eac8a fix: getAlbumInfo2 element name; artistId matches getArtists ids (resolves #6)\nb526548 fix: seeking and maxBitRate ignored on transcoded streams (resolves #5)\n9ae3c55 fix: transcode via Jellyfin's local URL; honour Jellyfin BaseUrl\nc1f6b15 ci: build and test both Jellyfin lines on every push and PR\nf42711d feat: build for Jellyfin 10.11 and 12.x from one source (resolves #3)\n1aa0c38 fix(security): scope share logins, enforce library access and ownership\n0d876e2 release: update manifest for v10.11.5.7 [skip ci]",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/williamkray/subfin-plugin/releases/download/v10.11.6.0/jellyfin-plugin-subfin_10.11.6.0.zip",
+        "timestamp": "2026-11-27T19:41:10Z",
+        "version": "10.11.6.0"
+      },
+      {
         "checksum": "28c67b8da76983c54a23ccd99376c77d",
         "changelog": "0d0d6bc chore: drop obsolete publish.sh from gitignore (releases via GitHub Actions)\n900c7ca feat: create shares from the web UI with search, tabbed layout\n03d54dc chore: untrack local dev/validation scripts\nddedc63 fix: use GetMusicGenres so getGenres returns music genres (resolves #1)\n16e517e chore: ignore publish.sh (contains private server config)\n1ee4ce3 release: update manifest for v10.11.5.4 [skip ci]\n3c080dc release: bump to v10.11.5.4\n520103c Initial commit: Subfin Jellyfin plugin v10.11.5.3",
         "targetAbi": "10.11.0.0",
