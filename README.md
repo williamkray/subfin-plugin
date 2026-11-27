@@ -4,8 +4,18 @@ Exposes an [OpenSubsonic](https://opensubsonic.netlify.app/)-compatible REST API
 
 ## Requirements
 
-- Jellyfin **10.11.x** (built against 10.11.6)
-- .NET 9 runtime (included in Jellyfin 10.11.x)
+- Jellyfin **10.11.x** or **12.x**
+
+Each release ships one build per Jellyfin line (`10.11.X.Y` for 10.11.x, `12.0.X.Y` for 12.x).
+Installing from the plugin repository picks the right one automatically.
+
+## Building
+
+```bash
+dotnet build                              # Jellyfin 10.11 (.NET 9) — default
+dotnet build -p:JellyfinTarget=12         # Jellyfin 12.x (.NET 10 SDK required)
+dotnet test  -p:JellyfinTarget=12
+```
 
 ## Installation
 

@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
-# Bump plugin version in meta.json and .csproj (single source of truth).
+# Bump the plugin version (single source of truth: <SubfinVersion> in the .csproj).
 #
-# Version scheme: JFMAJOR.JFMINOR.PLUGIN_MAJOR.PLUGIN_MINOR
-#   Part 1 (Major)    — Jellyfin major version targeted (e.g. 10)
-#   Part 2 (Minor)    — Jellyfin minor version targeted (e.g. 11)
-#   Part 3 (Build)    — Plugin feature/major version
-#   Part 4 (Revision) — Plugin patch version
+# The plugin is built for several Jellyfin lines from the same source. Each build's
+# four-part version is <Jellyfin ABI major.minor>.<SubfinVersion>:
+#   SubfinVersion 5.8 → 10.11.5.8 (Jellyfin 10.11.x) and 12.0.5.8 (Jellyfin 12.x)
+# serverVersion seen by Subsonic clients: "<SubfinVersion>.0" (e.g. "5.8.0").
+# meta.json "version" tracks the 10.11 line (used by deploy-dev and as the release tag).
 #
-# Example: 10.11.3.0 → targets Jellyfin 10.11.x, plugin release 3.0
-# serverVersion seen by Subsonic clients: "{Build}.{Revision}.0" (e.g. "3.0.0")
-#
-# Usage: ./scripts/bump-version.sh <NEW_VERSION>
-# Example: ./scripts/bump-version.sh 10.11.3.0
+# Usage: ./scripts/bump-version.sh <PLUGIN_VERSION>
+#   ./scripts/bump-version.sh 5.8          # plugin major.minor
+#   ./scripts/bump-version.sh 10.11.5.8    # legacy four-part form: last two parts are used
 
 set -euo pipefail
 
-NEW_VERSION="${1:-}"
-if [ -z "$NEW_VERSION" ]; then
-    echo "Usage: $0 <version>  (e.g. 0.2.1.0)" >&2
-    exit 1
-fi
-
-if [[ ! "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Error: version must be four-part (e.g. 0.2.1.0)" >&2
+ARG="${1:-}"
+if [[ "$ARG" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    SUBFIN_VERSION="$ARG"
+elif [[ "$ARG" =~ ^[0-9]+\.[0-9]+\.([0-9]+\.[0-9]+)$ ]]; then
+    SUBFIN_VERSION="${BASH_REMATCH[1]}"
+else
+    echo "Usage: $0 <plugin-version>  (e.g. 5.8, or legacy 10.11.5.8)" >&2
     exit 1
 fi
 
@@ -30,31 +27,13 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 META_SRC="$REPO_ROOT/meta.json"
 CSPROJ="$REPO_ROOT/Jellyfin.Plugin.Subsonic/Jellyfin.Plugin.Subsonic.csproj"
 
-OLD_VERSION=$(jq -r '.version' "$META_SRC")
+OLD=$(sed -n 's|.*<SubfinVersion>\(.*\)</SubfinVersion>.*|\1|p' "$CSPROJ")
+sed -i "s|<SubfinVersion>[^<]*</SubfinVersion>|<SubfinVersion>${SUBFIN_VERSION}</SubfinVersion>|" "$CSPROJ"
 
-# Parse new version parts
-IFS='.' read -r JF_MAJOR JF_MINOR PLUGIN_MAJOR PLUGIN_MINOR <<< "$NEW_VERSION"
-SERVER_VERSION="${PLUGIN_MAJOR}.${PLUGIN_MINOR}.0"
-
-# Check targetAbi consistency
-TARGET_ABI=$(jq -r '.targetAbi' "$META_SRC")
-ABI_MAJOR=$(echo "$TARGET_ABI" | cut -d. -f1)
-ABI_MINOR=$(echo "$TARGET_ABI" | cut -d. -f2)
-if [ "$JF_MAJOR" != "$ABI_MAJOR" ] || [ "$JF_MINOR" != "$ABI_MINOR" ]; then
-    echo "WARNING: new version implies Jellyfin ${JF_MAJOR}.${JF_MINOR}.x but targetAbi is ${TARGET_ABI}" >&2
-    echo "  Update targetAbi in meta.json manually if targeting a different Jellyfin version." >&2
-fi
-
-# Update meta.json
 tmp=$(mktemp)
-jq --arg v "$NEW_VERSION" '.version = $v' "$META_SRC" > "$tmp" && mv "$tmp" "$META_SRC"
+jq --arg v "10.11.${SUBFIN_VERSION}" '.version = $v | .targetAbi = "10.11.0.0"' "$META_SRC" > "$tmp" && mv "$tmp" "$META_SRC"
 
-# Update .csproj (AssemblyVersion and FileVersion)
-sed -i "s|<AssemblyVersion>[^<]*</AssemblyVersion>|<AssemblyVersion>${NEW_VERSION}</AssemblyVersion>|" "$CSPROJ"
-sed -i "s|<FileVersion>[^<]*</FileVersion>|<FileVersion>${NEW_VERSION}</FileVersion>|" "$CSPROJ"
-
-echo "Bumped ${OLD_VERSION} → ${NEW_VERSION}"
-echo "  meta.json:       $(jq -r '.version' "$META_SRC")"
-echo "  serverVersion:   ${SERVER_VERSION}  (what Subsonic clients see)"
-echo "  Plugin dir:      Subfin_${NEW_VERSION}"
-echo "  Run: ./scripts/deploy-dev.sh"
+echo "Bumped plugin version ${OLD} → ${SUBFIN_VERSION}"
+echo "  Jellyfin 10.11 build: 10.11.${SUBFIN_VERSION}   (meta.json, release tag v10.11.${SUBFIN_VERSION})"
+echo "  Jellyfin 12.x build:  12.0.${SUBFIN_VERSION}"
+echo "  serverVersion:        ${SUBFIN_VERSION}.0"

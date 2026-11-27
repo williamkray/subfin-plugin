@@ -867,7 +867,12 @@ public class SubsonicController : ControllerBase
             .ToArray();
 
         if (songIdsToAdd.Length > 0)
+#if JELLYFIN_12
+            // Jellyfin 12 added an insert position (null = append) before userId
+            await _playlists.AddItemToPlaylistAsync(guid, songIdsToAdd, position: null, userId: user.Id);
+#else
             await _playlists.AddItemToPlaylistAsync(guid, songIdsToAdd, user.Id);
+#endif
 
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
     }

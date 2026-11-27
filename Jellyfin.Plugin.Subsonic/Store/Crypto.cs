@@ -16,7 +16,10 @@ public static class Crypto
     private const int KeyLen = 32;
     private const string KdfSalt = "subfin-db-encryption-v1";
 
-    private static byte[]? _cachedKey;
+    // Cache keyed by salt: re-deriving costs 100k PBKDF2 iterations per call.
+    // Immutable reference type so concurrent readers never see a torn (salt, key) pair.
+    private sealed record KeyEntry(string Salt, byte[] Key);
+    private static volatile KeyEntry? _cachedKey;
 
     public static void SetSalt(string base64Salt)
     {
@@ -26,12 +29,16 @@ public static class Crypto
 
     private static byte[] _GetKey(string base64Salt)
     {
-        if (_cachedKey != null) return _cachedKey;
-        var saltBytes = Encoding.UTF8.GetBytes(KdfSalt);
-        var password = Convert.FromBase64String(base64Salt);
-        using var deriv = new Rfc2898DeriveBytes(password, saltBytes, 100_000, HashAlgorithmName.SHA256);
-        _cachedKey = deriv.GetBytes(KeyLen);
-        return _cachedKey;
+        var cached = _cachedKey;
+        if (cached != null && cached.Salt == base64Salt) return cached.Key;
+        // Same derivation as the obsolete Rfc2898DeriveBytes constructor used before (SYSLIB0060
+        // on .NET 10); CryptoTests.Decrypt_KeyMatchesPreviousReleases pins the output.
+        var key = Rfc2898DeriveBytes.Pbkdf2(
+            Convert.FromBase64String(base64Salt),
+            Encoding.UTF8.GetBytes(KdfSalt),
+            100_000, HashAlgorithmName.SHA256, KeyLen);
+        _cachedKey = new KeyEntry(base64Salt, key);
+        return key;
     }
 
     public static byte[] Encrypt(string plaintext, string salt)

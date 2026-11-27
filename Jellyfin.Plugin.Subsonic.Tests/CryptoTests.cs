@@ -10,6 +10,37 @@ public class CryptoTests
     private static string TestSalt() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     [Fact]
+    public void Decrypt_KeyMatchesPreviousReleases()
+    {
+        // Known-answer key for this salt, as derived by the Rfc2898DeriveBytes constructor used up
+        // to v10.11.5.7 (cross-checked with Python hashlib.pbkdf2_hmac). Blobs already stored in
+        // users' databases must keep decrypting.
+        var salt = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+        var key = Convert.FromHexString("B80B69E27C2BA2C851E28B5ED1040F84F5D58952FA8E2001AD450BB38054213B");
+        Crypto.SetSalt(salt);
+
+        var iv = new byte[12];
+        var plaintext = System.Text.Encoding.UTF8.GetBytes("stored-before-upgrade");
+        var ciphertext = new byte[plaintext.Length];
+        var tag = new byte[16];
+        using (var aes = new AesGcm(key, 16))
+            aes.Encrypt(iv, plaintext, ciphertext, tag);
+
+        Assert.Equal("stored-before-upgrade", Crypto.Decrypt([.. iv, .. tag, .. ciphertext], salt));
+    }
+
+    [Fact]
+    public void Decrypt_UsesKeyForTheGivenSalt()
+    {
+        var a = TestSalt();
+        var b = TestSalt();
+        Crypto.SetSalt(a);
+        var blob = Crypto.Encrypt("x", b);   // must derive b's key, not reuse a's cached key
+        Crypto.SetSalt(b);
+        Assert.Equal("x", Crypto.Decrypt(blob, b));
+    }
+
+    [Fact]
     public void RoundTrip_ReturnsOriginalPlaintext()
     {
         var salt = TestSalt();

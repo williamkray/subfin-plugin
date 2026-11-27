@@ -1,10 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!--
+      Build target: -p:JellyfinTarget=10.11 (default) or -p:JellyfinTarget=12.
+      Version = <Jellyfin ABI major.minor>.<SubfinVersion>, e.g. 10.11.5.8 / 12.0.5.8.
+      SubfinVersion (plugin major.minor) is the single source of truth — bump with
+      scripts/bump-version.sh. serverVersion seen by Subsonic clients is "<SubfinVersion>.0".
+    -->
+    <SubfinVersion>5.7</SubfinVersion>
+    <JellyfinTarget Condition="'$(JellyfinTarget)' == ''">10.11</JellyfinTarget>
+    <TargetFramework Condition="'$(JellyfinTarget)' == '10.11'">net9.0</TargetFramework>
+    <JellyfinPackageVersion Condition="'$(JellyfinTarget)' == '10.11'">10.11.6</JellyfinPackageVersion>
+    <JellyfinAbi Condition="'$(JellyfinTarget)' == '10.11'">10.11</JellyfinAbi>
+    <!-- Built against the lowest 12.x so one build loads on every 12.x server -->
+    <TargetFramework Condition="'$(JellyfinTarget)' == '12'">net10.0</TargetFramework>
+    <JellyfinPackageVersion Condition="'$(JellyfinTarget)' == '12'">12.0.0</JellyfinPackageVersion>
+    <JellyfinAbi Condition="'$(JellyfinTarget)' == '12'">12.0</JellyfinAbi>
+    <DefineConstants Condition="'$(JellyfinTarget)' == '12'">$(DefineConstants);JELLYFIN_12</DefineConstants>
     <AssemblyName>Jellyfin.Plugin.Subsonic</AssemblyName>
     <RootNamespace>Jellyfin.Plugin.Subsonic</RootNamespace>
-    <AssemblyVersion>10.11.5.7</AssemblyVersion>
-    <FileVersion>10.11.5.7</FileVersion>
+    <AssemblyVersion>$(JellyfinAbi).$(SubfinVersion)</AssemblyVersion>
+    <FileVersion>$(JellyfinAbi).$(SubfinVersion)</FileVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <Optimize>true</Optimize>
@@ -25,12 +40,16 @@
 
   <ItemGroup>
     <!-- Jellyfin SDK references — provided by the host at runtime -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.6" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.6" />
-    <PackageReference Include="Jellyfin.Database.Implementations" Version="10.11.6" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)" />
+    <PackageReference Include="Jellyfin.Database.Implementations" Version="$(JellyfinPackageVersion)" />
     <!-- SQLite -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
   </ItemGroup>
+
+  <Target Name="ValidateJellyfinTarget" BeforeTargets="Restore;Build">
+    <Error Condition="'$(JellyfinAbi)' == ''" Text="Unknown JellyfinTarget '$(JellyfinTarget)' (expected 10.11 or 12)." />
+  </Target>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
