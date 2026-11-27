@@ -6,7 +6,7 @@
       SubfinVersion (plugin major.minor) is the single source of truth — bump with
       scripts/bump-version.sh. serverVersion seen by Subsonic clients is "<SubfinVersion>.0".
     -->
-    <SubfinVersion>5.7</SubfinVersion>
+    <SubfinVersion>6.0</SubfinVersion>
     <JellyfinTarget Condition="'$(JellyfinTarget)' == ''">10.11</JellyfinTarget>
     <TargetFramework Condition="'$(JellyfinTarget)' == '10.11'">net9.0</TargetFramework>
     <JellyfinPackageVersion Condition="'$(JellyfinTarget)' == '10.11'">10.11.6</JellyfinPackageVersion>
