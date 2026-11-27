@@ -33,16 +33,18 @@ public static class LibraryQueries
             if (id.StartsWith("al-", StringComparison.Ordinal))
             {
                 if (!Guid.TryParse(id.Substring(3), out var albumGuid)) continue;
+                if (library.GetItemById<MusicAlbum>(albumGuid, user) == null) continue;
                 AddAlbumTracks(library, user, albumGuid, seen, flatIds);
             }
             else if (id.StartsWith("pl-", StringComparison.Ordinal))
             {
                 if (!Guid.TryParse(id.Substring(3), out var plGuid)) continue;
-                var pl = library.GetItemById<Playlist>(plGuid);
+                var pl = library.GetItemById<Playlist>(plGuid, user);
                 if (pl == null) continue;
                 foreach (var lc in pl.LinkedChildren ?? Array.Empty<LinkedChild>())
                 {
                     if (!lc.ItemId.HasValue) continue;
+                    if (library.GetItemById<Audio>(lc.ItemId.Value, user) == null) continue;
                     var tId = lc.ItemId.Value.ToString("N");
                     if (seen.Add(tId)) flatIds.Add(tId);
                 }
@@ -51,7 +53,9 @@ public static class LibraryQueries
             {
                 // Bare GUID (or ar-/al- prefixed) — resolve item type to handle artist, album, or track
                 if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) continue;
-                var item = library.GetItemById(guid);
+                // Visibility-checked: ids the user can't access (or that don't exist) are dropped
+                var item = library.GetItemById<BaseItem>(guid, user);
+                if (item == null) continue;
                 if (item is MusicArtist artistItem)
                 {
                     var albums = library.GetItemList(new InternalItemsQuery(user)
@@ -67,7 +71,7 @@ public static class LibraryQueries
                 {
                     AddAlbumTracks(library, user, albumItem.Id, seen, flatIds);
                 }
-                else
+                else if (item is Audio)
                 {
                     var tId = guid.ToString("N");
                     if (seen.Add(tId)) flatIds.Add(tId);

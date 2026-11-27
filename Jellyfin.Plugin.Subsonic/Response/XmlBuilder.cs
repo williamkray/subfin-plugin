@@ -100,7 +100,7 @@ public static class XmlBuilder
         w.WriteEndElement();
     });
 
-    public static string User(string username) => OkEnvelope(w =>
+    public static string User(string username, bool downloadRole = true, bool streamRole = true) => OkEnvelope(w =>
     {
         w.WriteStartElement("user", Ns);
         w.WriteAttributeString("username", username);
@@ -108,13 +108,13 @@ public static class XmlBuilder
         w.WriteAttributeString("scrobblingEnabled", "false");
         w.WriteAttributeString("adminRole", "false");
         w.WriteAttributeString("settingsRole", "false");
-        w.WriteAttributeString("downloadRole", "true");
+        w.WriteAttributeString("downloadRole", downloadRole ? "true" : "false");
         w.WriteAttributeString("uploadRole", "false");
         w.WriteAttributeString("playlistRole", "true");
         w.WriteAttributeString("coverArtRole", "false");
         w.WriteAttributeString("commentRole", "false");
         w.WriteAttributeString("podcastRole", "false");
-        w.WriteAttributeString("streamRole", "true");
+        w.WriteAttributeString("streamRole", streamRole ? "true" : "false");
         w.WriteAttributeString("jukeboxRole", "false");
         w.WriteAttributeString("shareRole", "false");
         w.WriteAttributeString("videoConversionRole", "false");

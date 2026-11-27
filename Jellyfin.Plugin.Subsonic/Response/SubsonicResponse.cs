@@ -32,6 +32,8 @@ public static class ErrorCode
     public const int WrongCredentials = 40;
     public const int TokenAuthNotSupported = 41;
     public const int NotLicensed = 50;
+    /// <summary>Subsonic 50: user is not authorized for the given operation.</summary>
+    public const int NotAuthorized = 50;
     public const int TrialExpired = 60;
     public const int NotFound = 70;
 }

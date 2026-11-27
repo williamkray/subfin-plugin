@@ -11,6 +11,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
@@ -112,6 +113,15 @@ public class SubsonicController : ControllerBase
         if (jellyfinUser == null)
             return Respond(format, SubsonicEnvelope.Error(ErrorCode.WrongCredentials, "User not found."), XmlBuilder.ErrorEnvelope(ErrorCode.WrongCredentials, "User not found."));
 
+        // Disabling a user in Jellyfin must revoke their app passwords and share links too
+        if (jellyfinUser.HasPermission(PermissionKind.IsDisabled))
+            return Respond(format, SubsonicEnvelope.Error(ErrorCode.WrongCredentials, "User is disabled."), XmlBuilder.ErrorEnvelope(ErrorCode.WrongCredentials, "User is disabled."));
+
+        // Share logins carry public credentials (embedded in the share URL): restrict them to
+        // playback of the shared tracks. Stream/Download enforce the per-track allowlist.
+        if (auth.ShareId != null && !SubsonicAuth.IsShareAllowedMethod(m))
+            return ErrorResponse(format, ErrorCode.NotAuthorized, "Share credentials only allow streaming the shared songs.");
+
         try
         {
             return await HandleAuthenticated(m, auth, jellyfinUser, q, format);
@@ -146,7 +156,7 @@ public class SubsonicController : ControllerBase
             "getindexes" => GetIndexes(auth, user, p, format),
             "getartist" => GetArtist(auth, user, p, format),
             "getalbum" => GetAlbum(auth, user, p, format),
-            "getsong" => GetSong(p, format),
+            "getsong" => GetSong(user, p, format),
             "getmusicdirectory" => GetMusicDirectory(auth, user, p, format),
             "search3" or "search2" => Search3(auth, user, p, format),
             "getalbumlist" => GetAlbumList(auth, user, p, format, false),
@@ -165,16 +175,16 @@ public class SubsonicController : ControllerBase
             "scrobble" => await Scrobble(auth, user, p, format),
             "getuser" or "getusers" => GetUser(user, format),
             "getscanstatus" => GetScanStatus(format),
-            "getnowplaying" => GetNowPlaying(format),
+            "getnowplaying" => GetNowPlaying(user, format),
             "saveplayqueue" => SavePlayQueue(auth, p, format),
-            "getplayqueue" => GetPlayQueue(auth, format),
+            "getplayqueue" => GetPlayQueue(auth, user, format),
             "getshares" or "createshare" or "updateshare" or "deleteshare"
                 when SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false
                 => ErrorResponse(format, ErrorCode.Generic, "Sharing is disabled."),
             "getshares" => GetShares(auth, user, format),
             "createshare" => CreateShare(auth, user, p, format),
-            "updateshare" => UpdateShare(p, format),
-            "deleteshare" => DeleteShare(p, format),
+            "updateshare" => UpdateShare(auth, p, format),
+            "deleteshare" => DeleteShare(auth, p, format),
             "getstarred" => GetStarred(user, format, false),
             "getstarred2" => GetStarred(user, format, true),
             "getartistinfo" or "getartistinfo2" => await GetArtistInfo(auth, user, p, format, method.EndsWith("2")),
@@ -183,8 +193,8 @@ public class SubsonicController : ControllerBase
             "gettopsongs" => GetTopSongs(user, p, format),
             "getlyrics" => await GetLyrics(user, p, format),
             "getlyricsbysongid" => await GetLyricsBySongId(user, p, format),
-            "stream" => await Stream(auth, p),
-            "download" => Download(p),
+            "stream" => await Stream(auth, user, p),
+            "download" => Download(auth, user, p),
             "getcoverart" => GetCoverArt(p),
             "getavatar" => GetAvatar(user),
             _ => Respond(format, SubsonicEnvelope.Error(ErrorCode.NotFound, $"Unknown method: {method}"), XmlBuilder.ErrorEnvelope(ErrorCode.NotFound, $"Unknown method: {method}"))
@@ -226,6 +236,7 @@ public class SubsonicController : ControllerBase
         var virtualFolders = _library.GetVirtualFolders();
         var musicFolders = virtualFolders
             .Where(f => f.CollectionType == MediaBrowser.Model.Entities.CollectionTypeOptions.music)
+            .Where(f => Guid.TryParse(f.ItemId, out var fid) && _library.GetItemById<BaseItem>(fid, user) != null)
             .Select(f => (f.ItemId, f.Name ?? ""))
             .ToList();
 
@@ -320,7 +331,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var artist = _library.GetItemById<MusicArtist>(guid);
+        var artist = _library.GetItemById<MusicArtist>(guid, user);
         if (artist == null) return ErrorResponse(format, ErrorCode.NotFound, "Artist not found");
 
         var folderIds = GetEffectiveFolderIds(auth, null);
@@ -387,7 +398,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var album = _library.GetItemById<MusicAlbum>(guid);
+        var album = _library.GetItemById<MusicAlbum>(guid, user);
         if (album == null) return ErrorResponse(format, ErrorCode.NotFound, "Album not found");
 
         var songs = _library.GetItemList(new InternalItemsQuery(user)
@@ -405,12 +416,12 @@ public class SubsonicController : ControllerBase
 
     // ── getSong ──────────────────────────────────────────────────────────────
 
-    private IActionResult GetSong(QueryParams p, string format)
+    private IActionResult GetSong(User user, QueryParams p, string format)
     {
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var song = _library.GetItemById<Audio>(guid);
+        var song = _library.GetItemById<Audio>(guid, user);
         if (song == null) return ErrorResponse(format, ErrorCode.NotFound, "Song not found");
 
         var mapped = ToSongWithArtist(song);
@@ -425,7 +436,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var item = _library.GetItemById(guid);
+        var item = _library.GetItemById<BaseItem>(guid, user);
         if (item == null) return ErrorResponse(format, ErrorCode.NotFound, "Not found");
 
         var children = _library.GetItemList(new InternalItemsQuery(user)
@@ -572,7 +583,7 @@ public class SubsonicController : ControllerBase
                 serialize: v => JsonSerializer.Serialize(v));
 
             var recentAlbums = albumGuids
-                .Select(id => _library.GetItemById<MusicAlbum>(Guid.ParseExact(id, "N")))
+                .Select(id => _library.GetItemById<MusicAlbum>(Guid.ParseExact(id, "N"), user))
                 .Where(a => a != null)
                 .Cast<MusicAlbum>()
                 .Select(ToAlbumWithArtist)
@@ -743,7 +754,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var pl = _library.GetItemById<Playlist>(guid);
+        var pl = _library.GetItemById<Playlist>(guid, user);
         if (pl == null) return ErrorResponse(format, ErrorCode.NotFound, "Playlist not found");
 
         var mapped = MapPlaylist(pl, user, true);
@@ -751,26 +762,32 @@ public class SubsonicController : ControllerBase
         return Respond(format, json, XmlBuilder.Playlist(mapped));
     }
 
+    /// <summary>
+    /// Playlist entries the user may see, in playlist order. Subsonic song indexes
+    /// (songIndexToRemove) and songCount refer to this list, not the raw LinkedChildren.
+    /// </summary>
+    private List<(LinkedChild Entry, Audio Song)> VisiblePlaylistEntries(Playlist pl, User user) =>
+        (pl.LinkedChildren ?? Array.Empty<LinkedChild>())
+            .Select(lc => (Entry: lc, Song: lc.ItemId.HasValue ? _library.GetItemById<Audio>(lc.ItemId.Value, user) : null))
+            .Where(t => t.Song != null)
+            .Select(t => (t.Entry, t.Song!))
+            .ToList();
+
     private Dictionary<string, object?> MapPlaylist(Playlist pl, User user, bool includeSongs)
     {
         var changed = pl.DateLastMediaAdded ?? pl.DateCreated;
-        var songs = includeSongs
-            ? (pl.LinkedChildren ?? Array.Empty<LinkedChild>())
-                .Select(lc => lc.ItemId.HasValue ? _library.GetItemById<Audio>(lc.ItemId.Value) : null)
-                .Where(a => a != null)
-                .Cast<Audio>()
-                .Select(ToSongWithArtist)
-                .ToList()
-            : new List<Dictionary<string, object?>>();
+        // List view (getPlaylists) skips per-entry visibility lookups and reports the raw count.
+        var visible = includeSongs ? VisiblePlaylistEntries(pl, user) : null;
+        var songs = visible?.Select(t => ToSongWithArtist(t.Song)).ToList() ?? new List<Dictionary<string, object?>>();
 
         return new()
         {
             ["id"] = $"pl-{pl.Id:N}",
             ["name"] = pl.Name ?? "",
             ["comment"] = pl.Overview ?? "",
-            ["owner"] = user.Username,
-            ["public"] = true,
-            ["songCount"] = pl.LinkedChildren?.Length ?? 0,
+            ["owner"] = (pl.OwnerUserId == user.Id ? user : _userManager.GetUserById(pl.OwnerUserId))?.Username ?? "",
+            ["public"] = pl.OpenAccess,
+            ["songCount"] = visible?.Count ?? pl.LinkedChildren?.Length ?? 0,
             ["duration"] = songs.Sum(s => s.TryGetValue("duration", out var d) ? d is int i ? i : 0 : 0),
             ["created"] = pl.DateCreated.ToString("o"),
             ["changed"] = (changed == default ? pl.DateCreated : changed).ToString("o"),
@@ -785,7 +802,8 @@ public class SubsonicController : ControllerBase
     {
         var name = p.Get("name") ?? "New Playlist";
         var songIds = Request.Query["songId"].Select(s => s ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
-        var itemIds = songIds.Select(s => { Guid.TryParse(ItemMapper.StripPrefix(s), out var g); return g; }).Where(g => g != Guid.Empty).ToArray();
+        var itemIds = songIds.Select(s => { Guid.TryParse(ItemMapper.StripPrefix(s), out var g); return g; })
+            .Where(g => g != Guid.Empty && _library.GetItemById<Audio>(g, user) != null).ToArray();
 
         var result = await _playlists.CreatePlaylist(new MediaBrowser.Model.Playlists.PlaylistCreationRequest
         {
@@ -807,8 +825,9 @@ public class SubsonicController : ControllerBase
         var id = p.Id ?? p.Get("playlistId");
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var pl = _library.GetItemById<Playlist>(guid);
+        var pl = _library.GetItemById<Playlist>(guid, user);
         if (pl == null) return ErrorResponse(format, ErrorCode.NotFound, "Playlist not found");
+        if (!PlaylistAccess.CanEdit(pl, user.Id)) return ErrorResponse(format, ErrorCode.NotAuthorized, "Not allowed to edit this playlist");
 
         // Rename if requested
         var name = p.Get("name");
@@ -827,10 +846,10 @@ public class SubsonicController : ControllerBase
 
         if (indexesToRemove.Count > 0)
         {
-            var children = pl.LinkedChildren ?? Array.Empty<LinkedChild>();
+            var children = VisiblePlaylistEntries(pl, user);
             var entryIds = indexesToRemove
-                .Where(i => i < children.Length)
-                .Select(i => children[i].ItemId?.ToString("N"))
+                .Where(i => i < children.Count)
+                .Select(i => children[i].Entry.ItemId?.ToString("N"))
                 .Where(s => !string.IsNullOrEmpty(s))
                 .Cast<string>()
                 .ToList();
@@ -844,7 +863,7 @@ public class SubsonicController : ControllerBase
             .Select(s => s ?? "")
             .Where(s => !string.IsNullOrEmpty(s))
             .Select(s => { Guid.TryParse(ItemMapper.StripPrefix(s), out var g); return g; })
-            .Where(g => g != Guid.Empty)
+            .Where(g => g != Guid.Empty && _library.GetItemById<Audio>(g, user) != null)
             .ToArray();
 
         if (songIdsToAdd.Length > 0)
@@ -858,8 +877,9 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var pl = _library.GetItemById<Playlist>(guid);
+        var pl = _library.GetItemById<Playlist>(guid, user);
         if (pl == null) return ErrorResponse(format, ErrorCode.NotFound, "Playlist not found");
+        if (!PlaylistAccess.CanDelete(pl, user.Id)) return ErrorResponse(format, ErrorCode.NotAuthorized, "Only the owner can delete this playlist");
 
         _library.DeleteItem(pl, new MediaBrowser.Controller.Library.DeleteOptions { DeleteFileLocation = true });
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
@@ -875,7 +895,7 @@ public class SubsonicController : ControllerBase
         foreach (var id in ids)
         {
             if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) continue;
-            var item = _library.GetItemById(guid);
+            var item = _library.GetItemById<BaseItem>(guid, user);
             if (item == null) continue;
             var data = _userData.GetUserData(user, item);
             if (data == null) continue;
@@ -894,7 +914,7 @@ public class SubsonicController : ControllerBase
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
         if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
 
-        var item = _library.GetItemById(guid);
+        var item = _library.GetItemById<BaseItem>(guid, user);
         if (item == null) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
 
         var data = _userData.GetUserData(user, item);
@@ -912,7 +932,7 @@ public class SubsonicController : ControllerBase
         if (string.IsNullOrEmpty(id)) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
         if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
 
-        var item = _library.GetItemById<Audio>(guid);
+        var item = _library.GetItemById<Audio>(guid, user);
         if (item == null) return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
 
         var submissionParam = Request.Query["submission"].ToString();
@@ -993,9 +1013,14 @@ public class SubsonicController : ControllerBase
 
     // ── getNowPlaying ────────────────────────────────────────────────────────
 
-    private IActionResult GetNowPlaying(string format)
+    private IActionResult GetNowPlaying(User user, string format)
     {
-        var sessions = _sessions.Sessions.Where(s => s.NowPlayingItem != null).ToList();
+        // Only audio the caller is allowed to see — never other users' video, or items from
+        // libraries outside the caller's access.
+        var sessions = _sessions.Sessions
+            .Where(s => s.NowPlayingItem != null
+                && _library.GetItemById<Audio>(s.NowPlayingItem.Id, user) != null)
+            .ToList();
         var entries = sessions.Select(s =>
         {
             var item = s.NowPlayingItem;
@@ -1040,7 +1065,7 @@ public class SubsonicController : ControllerBase
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
     }
 
-    private IActionResult GetPlayQueue(AuthResult auth, string format)
+    private IActionResult GetPlayQueue(AuthResult auth, User user, string format)
     {
         var pq = SubsonicStore.GetPlayQueue(auth.SubsonicUsername);
         if (pq == null) return Respond(format, SubsonicEnvelope.Ok(new() { ["playQueue"] = new Dictionary<string, object>() }),
@@ -1049,7 +1074,7 @@ public class SubsonicController : ControllerBase
         var songs = pq.EntryIds.Select(id =>
         {
             if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return null;
-            var audio = _library.GetItemById<Audio>(guid);
+            var audio = _library.GetItemById<Audio>(guid, user);
             return audio != null ? ToSongWithArtist(audio) : null;
         }).Where(s => s != null).Cast<Dictionary<string, object?>>().ToList();
 
@@ -1071,7 +1096,7 @@ public class SubsonicController : ControllerBase
 
     private IActionResult GetShares(AuthResult auth, User user, string format)
     {
-        var shares = SubsonicStore.GetSharesForUser(auth.SubsonicUsername);
+        var shares = SubsonicStore.GetSharesForJellyfinUser(auth.JellyfinUserId);
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
         var xmlShares = shares.Select(s => BuildShareXml(s, baseUrl, user)).ToList();
         var json = SubsonicEnvelope.Ok(new() { ["shares"] = new Dictionary<string, object> { ["share"] = xmlShares.Select(ShareToJson).ToList() } });
@@ -1087,17 +1112,17 @@ public class SubsonicController : ControllerBase
         if (!string.IsNullOrEmpty(expiresParam) && long.TryParse(expiresParam, out var ms) && ms > 0)
             expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(ms).ToString("o");
 
-        var devices = SubsonicStore.GetDevicesForUser(auth.SubsonicUsername);
-        var device = devices.FirstOrDefault();
+        var device = ResolveAuthDevice(auth);
         if (device == null) return ErrorResponse(format, ErrorCode.Generic, "No linked device found. Link a device first.");
 
         // Expand IDs to a flat list of audio track GUIDs.
         // Artist IDs are bare GUIDs; album IDs use al- prefix; playlist IDs use pl- prefix.
         var flatIds = LibraryQueries.ExpandShareIds(_library, user, ids);
+        if (flatIds.Count == 0) return ErrorResponse(format, ErrorCode.NotFound, "Nothing to share: no playable songs found for the given ids.");
 
         var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24))
             .Replace("+", "-").Replace("/", "_").Replace("=", "");
-        var uid = SubsonicStore.InsertShare(device.Id, ids, flatIds.Count > 0 ? flatIds : ids, desc, expiresAt, secret);
+        var uid = SubsonicStore.InsertShare(device.Id, ids, flatIds, desc, expiresAt, secret);
 
         var share = SubsonicStore.GetShare(uid)!;
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
@@ -1106,25 +1131,57 @@ public class SubsonicController : ControllerBase
         return Respond(format, json, XmlBuilder.ShareCreated(xmlShare));
     }
 
-    private IActionResult UpdateShare(QueryParams p, string format)
+    private IActionResult UpdateShare(AuthResult auth, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
+        if (!ShareOwnedBy(id, auth)) return ErrorResponse(format, ErrorCode.NotFound, "Share not found");
+        // Omitted params leave the stored value unchanged (editing only the description must
+        // not wipe — and thereby revive — an expiry). expires=0 removes the expiry.
+        var setDesc = Request.Query.ContainsKey("description");
         var desc = p.Get("description");
-        var expiresParam = p.Get("expires");
+        var setExp = Request.Query.ContainsKey("expires");
         string? expiresAt = null;
-        if (!string.IsNullOrEmpty(expiresParam) && long.TryParse(expiresParam, out var ms) && ms > 0)
+        if (setExp && long.TryParse(p.Get("expires"), out var ms) && ms > 0)
             expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(ms).ToString("o");
-        SubsonicStore.UpdateShare(id, desc, expiresAt);
+        SubsonicStore.UpdateShare(id, setDesc, desc, setExp, expiresAt);
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
     }
 
-    private IActionResult DeleteShare(QueryParams p, string format)
+    private IActionResult DeleteShare(AuthResult auth, QueryParams p, string format)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
+        if (!ShareOwnedBy(id, auth)) return ErrorResponse(format, ErrorCode.NotFound, "Share not found");
         SubsonicStore.DeleteShare(id);
         return Respond(format, SubsonicEnvelope.Ok(), XmlBuilder.Ping());
+    }
+
+    /// <summary>
+    /// The linked device the request authenticated with (AuthResult.JellyfinDeviceId is
+    /// "subfin-&lt;id&gt;"), falling back to any non-web-share device of the same Jellyfin user.
+    /// </summary>
+    private static LinkedDevice? ResolveAuthDevice(AuthResult auth)
+    {
+        var devId = auth.JellyfinDeviceId;
+        if (devId != null && devId.StartsWith("subfin-", StringComparison.Ordinal)
+            && long.TryParse(devId.AsSpan(7), out var id))
+        {
+            var d = SubsonicStore.GetDeviceById(id);
+            if (d != null && string.Equals(d.JellyfinUserId, auth.JellyfinUserId, StringComparison.OrdinalIgnoreCase))
+                return d;
+        }
+        return SubsonicStore.GetDevicesByJellyfinUserId(auth.JellyfinUserId)
+            .FirstOrDefault(d => d.JellyfinDeviceId != SubsonicStore.WebShareDeviceSentinel);
+    }
+
+    /// <summary>True when the share was created by (a device linked to) the authenticated Jellyfin user.</summary>
+    private static bool ShareOwnedBy(string shareUid, AuthResult auth)
+    {
+        var share = SubsonicStore.GetShare(shareUid);
+        if (share == null) return false;
+        var device = SubsonicStore.GetDeviceById(share.LinkedDeviceId);
+        return device != null && string.Equals(device.JellyfinUserId, auth.JellyfinUserId, StringComparison.OrdinalIgnoreCase);
     }
 
     private ShareXml BuildShareXml(ShareRecord s, string baseUrl, User user)
@@ -1140,7 +1197,7 @@ public class SubsonicController : ControllerBase
         var songs = s.EntryIdsFlat.Select(id =>
         {
             if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return null;
-            var audio = _library.GetItemById<Audio>(guid);
+            var audio = _library.GetItemById<Audio>(guid, user);
             return audio != null ? ToSongWithArtist(audio) : null;
         }).Where(x => x != null).Cast<Dictionary<string, object?>>().ToList();
 
@@ -1192,19 +1249,21 @@ public class SubsonicController : ControllerBase
             ["scrobblingEnabled"] = false,
             ["adminRole"] = false,
             ["settingsRole"] = false,
-            ["downloadRole"] = true,
+            ["downloadRole"] = user.HasPermission(PermissionKind.EnableContentDownloading),
             ["uploadRole"] = false,
             ["playlistRole"] = true,
             ["coverArtRole"] = false,
             ["commentRole"] = false,
             ["podcastRole"] = false,
-            ["streamRole"] = true,
+            ["streamRole"] = user.HasPermission(PermissionKind.EnableMediaPlayback),
             ["jukeboxRole"] = false,
             ["shareRole"] = false,
             ["videoConversionRole"] = false,
         };
         var json = SubsonicEnvelope.Ok(new() { ["user"] = userDict });
-        return Respond(format, json, XmlBuilder.User(user.Username));
+        return Respond(format, json, XmlBuilder.User(user.Username,
+            downloadRole: user.HasPermission(PermissionKind.EnableContentDownloading),
+            streamRole: user.HasPermission(PermissionKind.EnableMediaPlayback)));
     }
 
     // ── getScanStatus ────────────────────────────────────────────────────────
@@ -1223,7 +1282,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var artist = _library.GetItemById<MusicArtist>(guid);
+        var artist = _library.GetItemById<MusicArtist>(guid, user);
         if (artist == null) return ErrorResponse(format, ErrorCode.NotFound, "Artist not found");
 
         var mbid = artist.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.MusicBrainzArtist);
@@ -1275,7 +1334,7 @@ public class SubsonicController : ControllerBase
         var id = p.Id;
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var album = _library.GetItemById<MusicAlbum>(guid);
+        var album = _library.GetItemById<MusicAlbum>(guid, user);
         if (album == null) return ErrorResponse(format, ErrorCode.NotFound, "Album not found");
 
         var mbid = album.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.MusicBrainzAlbum);
@@ -1306,7 +1365,7 @@ public class SubsonicController : ControllerBase
         var dtoOptions = new DtoOptions();
         IReadOnlyList<BaseItem> results;
 
-        var item = _library.GetItemById(guid);
+        var item = _library.GetItemById<BaseItem>(guid, user);
         if (item == null) return ErrorResponse(format, ErrorCode.NotFound, "Item not found");
         if (item is MusicArtist ma)
             results = _musicManager.GetInstantMixFromArtist(ma, user, dtoOptions);
@@ -1445,7 +1504,7 @@ public class SubsonicController : ControllerBase
         // Prefer lookup by id if provided (more reliable than artist/title matching)
         var id = p.Id;
         if (!string.IsNullOrEmpty(id) && Guid.TryParse(ItemMapper.StripPrefix(id), out var guid))
-            song = _library.GetItemById<Audio>(guid);
+            song = _library.GetItemById<Audio>(guid, user);
 
         // Fall back to searching by title
         if (song == null && !string.IsNullOrEmpty(title))
@@ -1504,7 +1563,7 @@ public class SubsonicController : ControllerBase
         if (string.IsNullOrEmpty(id)) return ErrorResponse(format, ErrorCode.RequiredParameterMissing, "Missing id");
         if (!TryParseItemId(id, format, out var guid, out var err)) return err!;
 
-        var song = _library.GetItemById<Audio>(guid);
+        var song = _library.GetItemById<Audio>(guid, user);
         if (song == null) return ErrorResponse(format, ErrorCode.NotFound, "Song not found");
 
         var dto = await _lyricManager.GetLyricsAsync(song, CancellationToken.None);
@@ -1613,7 +1672,7 @@ public class SubsonicController : ControllerBase
             _      => ("mp3",  "mp3",    "audio/mpeg"),
         };
 
-    private async Task<IActionResult> Stream(AuthResult auth, QueryParams p)
+    private async Task<IActionResult> Stream(AuthResult auth, User user, QueryParams p)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return BadRequest();
@@ -1622,8 +1681,10 @@ public class SubsonicController : ControllerBase
         // Check share allowlist
         if (auth.ShareAllowedIds != null && !auth.ShareAllowedIds.Contains(guid.ToString("N")))
             return StatusCode(403);
+        if (!user.HasPermission(PermissionKind.EnableMediaPlayback))
+            return StatusCode(403);
 
-        var item = _library.GetItemById<Audio>(guid);
+        var item = _library.GetItemById<Audio>(guid, user);
         if (item?.Path == null) return NotFound();
 
         var format  = p.Format;
@@ -1674,13 +1735,19 @@ public class SubsonicController : ControllerBase
         return new FileStreamResult(await resp.Content.ReadAsStreamAsync(), mimeType);
     }
 
-    private IActionResult Download(QueryParams p)
+    private IActionResult Download(AuthResult auth, User user, QueryParams p)
     {
         var id = p.Id;
         if (string.IsNullOrEmpty(id)) return BadRequest();
         if (!Guid.TryParse(ItemMapper.StripPrefix(id), out var guid)) return NotFound();
 
-        var item = _library.GetItemById<Audio>(guid);
+        // Share logins may only download the shared tracks
+        if (auth.ShareAllowedIds != null && !auth.ShareAllowedIds.Contains(guid.ToString("N")))
+            return StatusCode(403);
+        if (!user.HasPermission(PermissionKind.EnableContentDownloading))
+            return StatusCode(403);
+
+        var item = _library.GetItemById<Audio>(guid, user);
         if (item?.Path == null) return NotFound();
 
         return PhysicalFile(item.Path, ItemMapper.AudioMimeType(item.Container), Path.GetFileName(item.Path), true);

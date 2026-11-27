@@ -67,6 +67,12 @@ public static class SubsonicStore
         pragma.ExecuteNonQuery();
 
         RunSchema();
+
+        // Purge shares orphaned by device deletions from before DeleteDevice removed them
+        // explicitly (ON DELETE CASCADE never fired: foreign_keys is off on this connection).
+        using var purge = _db.CreateCommand();
+        purge.CommandText = "DELETE FROM shares WHERE linked_device_id NOT IN (SELECT id FROM linked_devices)";
+        purge.ExecuteNonQuery();
     }
 
     private static SqliteConnection Db => _db ?? throw new InvalidOperationException("Store not initialized");
@@ -211,9 +217,15 @@ public static class SubsonicStore
         lock (_lock)
         {
             using var cmd = Db.CreateCommand();
-            cmd.CommandText = "DELETE FROM linked_devices WHERE id = @id";
+            // foreign_keys is not enabled on this connection, so the schema's ON DELETE CASCADE
+            // never fires: delete the device's shares explicitly, otherwise its public share
+            // links would outlive the device (and become unmanageable by the owner).
+            using var tx = Db.BeginTransaction();
+            cmd.Transaction = tx;
+            cmd.CommandText = "DELETE FROM shares WHERE linked_device_id = @id; DELETE FROM linked_devices WHERE id = @id";
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
+            tx.Commit();
         }
     }
 
@@ -431,6 +443,29 @@ public static class SubsonicStore
         }
     }
 
+    /// <summary>
+    /// Shares created by any device linked to the given Jellyfin user (no-dash "N" id).
+    /// Prefer this over <see cref="GetSharesForUser"/>: Subsonic usernames are copied from the
+    /// Jellyfin username at link time and can collide after renames.
+    /// </summary>
+    public static List<ShareRecord> GetSharesForJellyfinUser(string jellyfinUserId)
+    {
+        lock (_lock)
+        {
+            var list = new List<ShareRecord>();
+            using var cmd = Db.CreateCommand();
+            cmd.CommandText = @"
+                SELECT s.* FROM shares s
+                JOIN linked_devices d ON d.id = s.linked_device_id
+                WHERE d.jellyfin_user_id = @j
+                ORDER BY s.created_at DESC";
+            cmd.Parameters.AddWithValue("@j", jellyfinUserId);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) list.Add(ReadShare(reader));
+            return list;
+        }
+    }
+
     public static List<ShareRecord> GetSharesForUser(string username)
     {
         lock (_lock)
@@ -471,12 +506,21 @@ public static class SubsonicStore
         }
     }
 
-    public static void UpdateShare(string shareUid, string? description, string? expiresAt)
+    /// <summary>
+    /// Updates a share. Fields whose <c>set*</c> flag is false are left unchanged, so a client
+    /// editing only the description doesn't wipe (and thereby revive) an expiry.
+    /// </summary>
+    public static void UpdateShare(string shareUid, bool setDescription, string? description, bool setExpiresAt, string? expiresAt)
     {
         lock (_lock)
         {
             using var cmd = Db.CreateCommand();
-            cmd.CommandText = "UPDATE shares SET description = @desc, expires_at = @exp WHERE share_uid = @uid";
+            cmd.CommandText = @"UPDATE shares SET
+                description = CASE WHEN @setDesc THEN @desc ELSE description END,
+                expires_at  = CASE WHEN @setExp  THEN @exp  ELSE expires_at  END
+                WHERE share_uid = @uid";
+            cmd.Parameters.AddWithValue("@setDesc", setDescription ? 1 : 0);
+            cmd.Parameters.AddWithValue("@setExp", setExpiresAt ? 1 : 0);
             cmd.Parameters.AddWithValue("@desc", (object?)description ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@exp", (object?)expiresAt ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@uid", shareUid);

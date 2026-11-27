@@ -8,9 +8,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Plugin.Subsonic.Auth;
 using Jellyfin.Plugin.Subsonic.Mappers;
 using Jellyfin.Plugin.Subsonic.Store;
 using MediaBrowser.Controller.Entities;
@@ -57,18 +59,9 @@ public class WebController : ControllerBase
     [HttpGet("share/{uid}")]
     public IActionResult SharePage(string uid)
     {
-        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var secret = Request.Query["secret"].ToString();
-        var share = SubsonicStore.GetShare(uid);
-        if (share == null) return NotFound("Share not found.");
-
-        // Validate secret
-        var storedSecret = SubsonicStore.GetShareSecret(uid);
-        if (storedSecret != secret) return Unauthorized("Invalid share link.");
-
-        // Check expiry
-        if (!string.IsNullOrEmpty(share.ExpiresAt) && DateTimeOffset.Parse(share.ExpiresAt) < DateTimeOffset.UtcNow)
-            return BadRequest("This share has expired.");
+        var (status, error, share, owner) = ResolvePublicShare(uid, secret, PermissionKind.EnableMediaPlayback);
+        if (error != null) return StatusCode(status, error);
 
         SubsonicStore.IncrementShareVisitCount(uid);
 
@@ -76,7 +69,7 @@ public class WebController : ControllerBase
         var tracks = share.EntryIdsFlat.Select(id =>
         {
             if (!Guid.TryParse(id, out var guid)) return null;
-            var audio = _library.GetItemById<Audio>(guid);
+            var audio = _library.GetItemById<Audio>(guid, owner);
             if (audio == null) return null;
             var duration = ItemMapper.TicksToSeconds(audio.RunTimeTicks);
             var artist = audio.AlbumArtists.FirstOrDefault() ?? audio.Artists.FirstOrDefault() ?? "";
@@ -91,6 +84,27 @@ public class WebController : ControllerBase
             .Replace("{{TRACKS_JSON}}", tracksJson)
             .Replace("{{DESCRIPTION}}", System.Net.WebUtility.HtmlEncode(share.Description ?? "Shared Music"));
         return Content(html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// Validates a public share request (page / m3u / zip): sharing enabled, share exists,
+    /// secret matches (constant time), not expired, and the owning device + Jellyfin user still
+    /// exist, are not disabled and hold <paramref name="required"/>. Track lookups must then use
+    /// the returned owner so library access / parental controls apply.
+    /// </summary>
+    private (int Status, string? Error, ShareRecord Share, User Owner) ResolvePublicShare(string uid, string secret, PermissionKind required)
+    {
+        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return (404, "Not found.", null!, null!);
+        var share = SubsonicStore.GetShare(uid);
+        if (share == null) return (404, "Share not found.", null!, null!);
+        if (!SubsonicAuth.SecretEquals(SubsonicStore.GetShareSecret(uid), secret)) return (401, "Invalid share link.", null!, null!);
+        if (SubsonicAuth.IsShareExpired(share.ExpiresAt)) return (410, "This share has expired.", null!, null!);
+
+        var device = SubsonicStore.GetDeviceById(share.LinkedDeviceId);
+        var owner = device != null && Guid.TryParse(device.JellyfinUserId, out var ownerId) ? _userManager.GetUserById(ownerId) : null;
+        if (owner == null || owner.HasPermission(PermissionKind.IsDisabled) || !owner.HasPermission(required))
+            return (404, "Share not found.", null!, null!);
+        return (200, null, share, owner);
     }
 
     // ── API: session ─────────────────────────────────────────────────────────
@@ -208,7 +222,7 @@ public class WebController : ControllerBase
         if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var (user, err) = ResolveUser();
         if (user == null) return err!;
-        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        var shares = SubsonicStore.GetSharesForJellyfinUser(user.Id.ToString("N"));
         var baseUrl = $"{Request.Scheme}://{Request.Host}";
         return Ok(shares.Select(s => {
             var secret = SubsonicStore.GetShareSecret(s.ShareUid) ?? "";
@@ -335,7 +349,7 @@ public class WebController : ControllerBase
         var share = SubsonicStore.GetShare(uid);
         if (share == null) return NotFound();
         // Verify this share belongs to the current user
-        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        var shares = SubsonicStore.GetSharesForJellyfinUser(user.Id.ToString("N"));
         if (!shares.Any(s => s.ShareUid == uid)) return Forbid();
         SubsonicStore.DeleteShare(uid);
         return Ok();
@@ -382,7 +396,7 @@ public class WebController : ControllerBase
     {
         var (user, err) = ResolveUser();
         if (user == null) return err!;
-        var shares = SubsonicStore.GetSharesForUser(user.Username);
+        var shares = SubsonicStore.GetSharesForJellyfinUser(user.Id.ToString("N"));
         if (!shares.Any(s => s.ShareUid == uid)) return Forbid();
         SubsonicStore.UpdateShareDescription(uid, req.Description);
         return Ok();
@@ -404,16 +418,9 @@ public class WebController : ControllerBase
     [HttpGet("share/{uid}/m3u")]
     public IActionResult ShareM3u(string uid)
     {
-        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) return NotFound();
         var secret = Request.Query["secret"].ToString();
-        var share = SubsonicStore.GetShare(uid);
-        if (share == null) return NotFound("Share not found.");
-
-        var storedSecret = SubsonicStore.GetShareSecret(uid);
-        if (storedSecret != secret) return Unauthorized("Invalid share link.");
-
-        if (!string.IsNullOrEmpty(share.ExpiresAt) && DateTimeOffset.Parse(share.ExpiresAt) < DateTimeOffset.UtcNow)
-            return BadRequest("This share has expired.");
+        var (status, error, share, owner) = ResolvePublicShare(uid, secret, PermissionKind.EnableMediaPlayback);
+        if (error != null) return StatusCode(status, error);
 
         SubsonicStore.IncrementShareVisitCount(uid);
 
@@ -423,7 +430,7 @@ public class WebController : ControllerBase
         foreach (var id in share.EntryIdsFlat)
         {
             if (!Guid.TryParse(id, out var guid)) continue;
-            var audio = _library.GetItemById<Audio>(guid);
+            var audio = _library.GetItemById<Audio>(guid, owner);
             if (audio == null) continue;
             var duration = ItemMapper.TicksToSeconds(audio.RunTimeTicks);
             var artist = audio.AlbumArtists.FirstOrDefault() ?? "";
@@ -441,16 +448,9 @@ public class WebController : ControllerBase
     [HttpGet("share/{uid}/download")]
     public async Task ShareZip(string uid)
     {
-        if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false) { Response.StatusCode = 404; return; }
         var secret = Request.Query["secret"].ToString();
-        var share = SubsonicStore.GetShare(uid);
-        if (share == null) { Response.StatusCode = 404; return; }
-
-        var storedSecret = SubsonicStore.GetShareSecret(uid);
-        if (storedSecret != secret) { Response.StatusCode = 401; return; }
-
-        if (!string.IsNullOrEmpty(share.ExpiresAt) && DateTimeOffset.Parse(share.ExpiresAt) < DateTimeOffset.UtcNow)
-        { Response.StatusCode = 410; return; }
+        var (status, error, share, owner) = ResolvePublicShare(uid, secret, PermissionKind.EnableContentDownloading);
+        if (error != null) { Response.StatusCode = status; return; }
 
         var m3u = new StringBuilder("#EXTM3U\n");
         var usedNames = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -460,7 +460,7 @@ public class WebController : ControllerBase
         foreach (var id in share.EntryIdsFlat)
         {
             if (!Guid.TryParse(id, out var guid)) continue;
-            var audio = _library.GetItemById<Audio>(guid);
+            var audio = _library.GetItemById<Audio>(guid, owner);
             if (audio?.Path == null) continue;
 
             var baseName = Path.GetFileName(audio.Path);

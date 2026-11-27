@@ -49,6 +49,9 @@ public class SubsonicAuth
             if (string.IsNullOrEmpty(shareUid))
                 return new AuthError(10, "Invalid share username.");
 
+            if (SubsonicPlugin.Instance?.Configuration?.SharingEnabled == false)
+                return new AuthError(40, "Wrong username or password.");
+
             var rawP = DecodePassword(p);
             if (!string.IsNullOrEmpty(rawP))
             {
@@ -56,8 +59,10 @@ public class SubsonicAuth
                 if (share != null)
                 {
                     var storedSecret = SubsonicStore.GetShareSecret(shareUid);
-                    if (storedSecret == rawP)
+                    if (SecretEquals(storedSecret, rawP))
                     {
+                        if (IsShareExpired(share.ExpiresAt))
+                            return new AuthError(40, "This share has expired.");
                         var device = SubsonicStore.GetDeviceById(share.LinkedDeviceId);
                         if (device != null)
                         {
@@ -116,6 +121,33 @@ public class SubsonicAuth
 
         var (dId, dName) = DeviceDisplay(matched.Id, matched.DeviceLabel);
         return new AuthResult(u, matched.JellyfinUserId, dId, dName);
+    }
+
+    /// <summary>
+    /// Methods a share login (u=share_&lt;uid&gt;) may call. A share link's credentials are
+    /// public (they are embedded in the share URL), so they must only grant playback of the
+    /// shared tracks — never the sharing user's full API access.
+    /// ping / getLicense / getOpenSubsonicExtensions are handled before auth and need no entry.
+    /// </summary>
+    public static bool IsShareAllowedMethod(string lowerMethod) =>
+        lowerMethod is "stream" or "download";
+
+    /// <summary>Constant-time comparison for share secrets.</summary>
+    public static bool SecretEquals(string? expected, string? actual)
+    {
+        if (string.IsNullOrEmpty(expected) || actual == null) return false;
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(actual));
+    }
+
+    /// <summary>True when the share has an expiry that is in the past (or unparseable).</summary>
+    public static bool IsShareExpired(string? expiresAt, DateTimeOffset? now = null)
+    {
+        if (string.IsNullOrEmpty(expiresAt)) return false;
+        if (!DateTimeOffset.TryParse(expiresAt, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var exp))
+            return true; // fail closed
+        return exp < (now ?? DateTimeOffset.UtcNow);
     }
 
     internal static string? DecodePassword(string p)
