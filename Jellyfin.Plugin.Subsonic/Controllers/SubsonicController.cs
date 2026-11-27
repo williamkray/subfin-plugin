@@ -1721,6 +1721,12 @@ public class SubsonicController : ControllerBase
                  $"&deviceId={Uri.EscapeDataString(auth.JellyfinDeviceId ?? "subfin")}";
         if (bitRate > 0) qs += $"&audioBitRate={bitRate * 1000}";
         if (timeOff > 0) qs += $"&startTimeTicks={(long)timeOff * 10_000_000L}";
+        // Jellyfin names (and reuses) progressive transcode output by item + device + play session.
+        // Without a session id, a request with a new timeOffset or maxBitRate was served the earlier
+        // transcode of the same song (full length, old bitrate). Derive the session id from every
+        // parameter that changes the output, so identical requests (e.g. Range retries) still
+        // share one transcode while a seek or bitrate change gets a fresh one.
+        qs += $"&playSessionId={TranscodeSessionId(guid, auth.JellyfinDeviceId, container, audioCodec, bitRate, timeOff)}";
 
         // Call Jellyfin on its own loopback URL (BaseUrl included), never the client-facing host:
         // behind a reverse proxy, a mapped port or a public hostname the server may not be able
@@ -1745,6 +1751,12 @@ public class SubsonicController : ControllerBase
 
         // Use our known mimeType — Jellyfin may return "video/webm" for audio-only WebM which confuses clients
         return new FileStreamResult(await resp.Content.ReadAsStreamAsync(), mimeType);
+    }
+
+    internal static string TranscodeSessionId(Guid itemId, string? deviceId, string container, string audioCodec, int bitRateKbps, int timeOffsetSeconds)
+    {
+        var key = $"{itemId:N}|{deviceId}|{container}|{audioCodec}|{bitRateKbps}|{timeOffsetSeconds}";
+        return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)), 0, 16).ToLowerInvariant();
     }
 
     private IActionResult Download(AuthResult auth, User user, QueryParams p)
