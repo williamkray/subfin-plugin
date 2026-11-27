@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# Two tags must never update the manifest concurrently
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build (Jellyfin ${{ matrix.jellyfin }})
@@ -41,6 +46,10 @@ jobs:
         id: version
         run: |
           TAG="${GITHUB_REF_NAME#v}"                       # e.g. 10.11.5.8
+          if [[ ! "$TAG" =~ ^10\.11\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tags must be v10.11.X.Y (got $GITHUB_REF_NAME). Use scripts/release.sh."
+            exit 1
+          fi
           SUBFIN_VERSION=$(echo "$TAG" | cut -d. -f3-4)     # e.g. 5.8
           CSPROJ_VERSION=$(sed -n 's|.*<SubfinVersion>\(.*\)</SubfinVersion>.*|\1|p' Jellyfin.Plugin.Subsonic/Jellyfin.Plugin.Subsonic.csproj)
           if [ "$SUBFIN_VERSION" != "$CSPROJ_VERSION" ]; then
@@ -132,41 +141,52 @@ jobs:
           CHANGELOG: ${{ steps.changelog.outputs.CHANGELOG }}
         run: |
           NOTES=$(printf '%s\n\nAssets: one zip per Jellyfin line (10.11.x → 10.11.*, 12.x → 12.0.*). Installing via the plugin repository picks the right one automatically.\n' "$CHANGELOG")
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$NOTES" dist/*.zip
+          # Idempotent so a re-run (e.g. after a failed manifest push) doesn't fail here
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$NOTES" dist/*.zip
+          fi
 
-      - name: Update manifest
+      - name: Update manifest on main
         env:
           CHANGELOG: ${{ steps.changelog.outputs.CHANGELOG }}
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           IMAGE_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/logo.png"
-
           NEW_ENTRIES=$(jq -s --arg changelog "$CHANGELOG" --arg ts "$TIMESTAMP" --arg base "$BASE_URL" \
             'map({checksum, changelog: $changelog, targetAbi, sourceUrl: ($base + "/" + .zip), timestamp: $ts, version})
              | sort_by(.targetAbi | split(".") | map(tonumber)) | reverse' dist/entry-*.json)
 
-          EXISTING=$(jq '.[0].versions // []' jellyfin-plugin-subfin-manifest.json 2>/dev/null || echo "[]")
-          VERSIONS=$(jq -n --argjson new "$NEW_ENTRIES" --argjson old "$EXISTING" \
-            '($new | map(.version)) as $vs | $new + ($old | map(select(.version as $v | $vs | index($v) | not)))')
+          # The tag commit may be behind main: always edit main's current manifest, and retry
+          # if main moves between fetch and push.
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin main
+            git checkout -q -B main origin/main
+            EXISTING=$(jq '.[0].versions // []' jellyfin-plugin-subfin-manifest.json 2>/dev/null || echo "[]")
+            VERSIONS=$(jq -n --argjson new "$NEW_ENTRIES" --argjson old "$EXISTING" \
+              '($new | map(.version)) as $vs | $new + ($old | map(select(.version as $v | $vs | index($v) | not)))')
+            jq -n \
+              --arg category "$(jq -r '.category' meta.json)" \
+              --arg description "$(jq -r '.description' meta.json)" \
+              --arg guid "$(jq -r '.guid' meta.json)" \
+              --arg imageUrl "$IMAGE_URL" \
+              --arg overview "$(jq -r '.overview' meta.json)" \
+              --arg owner "$(jq -r '.owner' meta.json)" \
+              --argjson versions "$VERSIONS" \
+              '[{category: $category, description: $description, guid: $guid, imageUrl: $imageUrl, name: "Subfin", overview: $overview, owner: $owner, versions: $versions}]' \
+              > jellyfin-plugin-subfin-manifest.json
+            jq -c '.[0].versions[0:3][] | {version, targetAbi, sourceUrl}' jellyfin-plugin-subfin-manifest.json
 
-          jq -n \
-            --arg category "$(jq -r '.category' meta.json)" \
-            --arg description "$(jq -r '.description' meta.json)" \
-            --arg guid "$(jq -r '.guid' meta.json)" \
-            --arg imageUrl "$IMAGE_URL" \
-            --arg overview "$(jq -r '.overview' meta.json)" \
-            --arg owner "$(jq -r '.owner' meta.json)" \
-            --argjson versions "$VERSIONS" \
-            '[{category: $category, description: $description, guid: $guid, imageUrl: $imageUrl, name: "Subfin", overview: $overview, owner: $owner, versions: $versions}]' \
-            > jellyfin-plugin-subfin-manifest.json
-
-          jq -c '.[0].versions[0:3][] | {version, targetAbi, sourceUrl}' jellyfin-plugin-subfin-manifest.json
-
-      - name: Commit updated manifest
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add jellyfin-plugin-subfin-manifest.json
-          git commit -m "release: update manifest for ${GITHUB_REF_NAME} [skip ci]"
-          git push origin HEAD:main
+            git add jellyfin-plugin-subfin-manifest.json
+            if git diff --cached --quiet; then echo "Manifest already up to date."; exit 0; fi
+            git commit -q -m "release: update manifest for ${GITHUB_REF_NAME} [skip ci]"
+            if git push -q origin main; then echo "Manifest pushed."; exit 0; fi
+            echo "Push rejected (main moved); retrying ($attempt)..."
+            sleep $((attempt * 3))
+          done
+          echo "::error::Could not push the manifest update to main"
+          exit 1

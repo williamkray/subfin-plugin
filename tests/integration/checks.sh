@@ -28,10 +28,15 @@ item() { curl -s "$BASE/Items?Recursive=true&IncludeItemTypes=$1&SearchTerm=$(jq
 
 DOUBLE=$(item MusicAlbum "Double Album"); SINGLE=$(item MusicAlbum "Single Album"); OTHER=$(item MusicAlbum "Other Album")
 LOOSE=$(item Audio "Loose Track 1"); SONG1=$(item Audio "Single 1"); SONG2=$(item Audio "Single 2"); OTHERSONG=$(item Audio "Other 1")
+# Fail fast on a missed lookup: an id of "null" would make the "denied"/"not found" checks pass vacuously
+for v in DOUBLE SINGLE OTHER LOOSE SONG1 SONG2 OTHERSONG; do
+  [[ "${!v}" =~ ^[0-9a-f]{32}$ ]] || { echo "fixture lookup failed: $v='${!v}'" >&2; exit 1; }
+done
 
 echo "== endpoint sweep (owner)"
 PL=$(api createPlaylist "$OQ" "name=it-sweep&songId=$SONG1" | jq -r '."subsonic-response".playlist.id')
 ARTIST=$(api getAlbum "$OQ" "id=$SINGLE" | jq -r '."subsonic-response".album.artistId')
+[[ "$PL" == pl-* && "$ARTIST" =~ ^[0-9a-f]{32}$ ]] || { echo "setup failed: PL='$PL' ARTIST='$ARTIST'" >&2; exit 1; }
 while read -r m params; do
   expect "$m" "$(code "$m" "$OQ" "$params")" ok
 done <<EOF

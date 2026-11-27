@@ -73,6 +73,7 @@ for _ in $(seq 1 60); do
   missing=$(curl -s "$J/Items?Recursive=true&IncludeItemTypes=Audio" -H "$AH" | jq '[.Items[] | select(.IndexNumber == null)] | length')
   [ "$missing" = 0 ] && break; sleep 2
 done
+[ "$missing" = 0 ] || { echo "tag extraction incomplete ($missing tracks without tags)" >&2; exit 1; }
 
 LIBS=$(curl -sf "$J/Library/VirtualFolders" -H "$AH")
 LIB1_ID=$(echo "$LIBS" | jq -r '.[] | select(.Name=="lib1") | .ItemId')

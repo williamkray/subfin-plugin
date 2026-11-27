@@ -57,6 +57,13 @@ public class SubsonicController : ControllerBase
     private readonly IServerApplicationHost _appHost;
     private readonly ILogger<SubsonicController> _logger;
     private static readonly ConcurrentDictionary<string, byte> _refreshInProgress = new();
+    // Stream proxy client: never follow redirects (they would drop Authorization); fail fast on
+    // unreachable candidates.
+    private static readonly HttpClient _proxyClient = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        ConnectTimeout = TimeSpan.FromSeconds(5),
+    }) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
 
     public SubsonicController(
         SubsonicAuth auth,
@@ -411,7 +418,7 @@ public class SubsonicController : ControllerBase
             ParentId = guid,
             Recursive = true,
             IncludeItemTypes = [BaseItemKind.Audio],
-            OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Ascending), (ItemSortBy.IndexNumber, SortOrder.Ascending)],
+            OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Ascending), (ItemSortBy.IndexNumber, SortOrder.Ascending), (ItemSortBy.SortName, SortOrder.Ascending)],
         }).OfType<Audio>().ToList();
 
         var resolvedArtistId = ResolveArtistTagId(album.AlbumArtist ?? album.AlbumArtists.FirstOrDefault());
@@ -1741,19 +1748,53 @@ public class SubsonicController : ControllerBase
         // share one transcode while a seek or bitrate change gets a fresh one.
         qs += $"&playSessionId={TranscodeSessionId(guid, auth.JellyfinDeviceId, container, audioCodec, bitRate, timeOff)}";
 
-        // Call Jellyfin on its own loopback URL (BaseUrl included), never the client-facing host:
-        // behind a reverse proxy, a mapped port or a public hostname the server may not be able
-        // to reach itself at the address the client used.
-        var url = $"{_appHost.GetApiUrlForLocalAccess(allowHttps: false).TrimEnd('/')}/Audio/{guid:N}/stream.{container}?{qs}";
-        _logger.LogInformation("[Subfin] stream proxy → {Url}", url);
-        var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.TryAddWithoutValidation("Authorization", $"MediaBrowser Token=\"{apiKey}\"");
+        // Proxy to Jellyfin itself. Candidates, in order:
+        //  1. explicit loopback on the HTTP port (+BaseUrl) — works behind reverse proxies, mapped
+        //     ports and public names the server can't resolve, and ignores published-URL overrides;
+        //  2. Jellyfin's own local-access URL (bind address) — for setups not listening on loopback;
+        //  3. the client-facing URL — last resort (e.g. RequireHttps setups that redirect plain HTTP).
+        // Redirects are not followed (they would drop the Authorization header); a 3xx or a
+        // connection failure moves on to the next candidate.
+        var path = $"/Audio/{guid:N}/stream.{container}?{qs}";
+        var candidates = new[]
+            {
+                $"http://127.0.0.1:{_appHost.HttpPort}{Urls.BasePath(Request)}",
+                _appHost.GetApiUrlForLocalAccess(allowHttps: false),
+                Urls.PublicBase(Request),
+            }
+            .Select(b => b.TrimEnd('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        var rangeHeader = Request.Headers["Range"].ToString();
-        if (!string.IsNullOrEmpty(rangeHeader))
-            req.Headers.TryAddWithoutValidation("Range", rangeHeader);
-
-        var resp = await _httpClientFactory.CreateClient().SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        HttpResponseMessage? resp = null;
+        foreach (var baseUrl in candidates)
+        {
+            var url = baseUrl + path;
+            _logger.LogInformation("[Subfin] stream proxy → {Url}", url);
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("Authorization", $"MediaBrowser Token=\"{apiKey}\"");
+            var rangeHeader = Request.Headers["Range"].ToString();
+            if (!string.IsNullOrEmpty(rangeHeader))
+                req.Headers.TryAddWithoutValidation("Range", rangeHeader);
+            try
+            {
+                var r = await _proxyClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, HttpContext.RequestAborted);
+                if ((int)r.StatusCode is >= 300 and < 400)
+                {
+                    _logger.LogInformation("[Subfin] stream proxy: {Url} redirected ({Status}), trying next", url, (int)r.StatusCode);
+                    r.Dispose();
+                    continue;
+                }
+                resp = r;
+                break;
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogInformation("[Subfin] stream proxy: {Url} unreachable ({Message}), trying next", url, ex.Message);
+            }
+        }
+        if (resp == null)
+            return StatusCode(502);
         Response.RegisterForDispose(resp);
         Response.StatusCode = (int)resp.StatusCode;
 

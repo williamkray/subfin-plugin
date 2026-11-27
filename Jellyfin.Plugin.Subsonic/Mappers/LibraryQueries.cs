@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
@@ -88,6 +89,7 @@ public static class LibraryQueries
             ParentId = albumGuid,
             Recursive = true,   // multi-disc albums: tracks live in disc subfolders
             IncludeItemTypes = [BaseItemKind.Audio],
+            OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Ascending), (ItemSortBy.IndexNumber, SortOrder.Ascending), (ItemSortBy.SortName, SortOrder.Ascending)],
         }).OfType<Audio>().ToList();
         foreach (var t in tracks)
             if (seen.Add(t.Id.ToString("N"))) flatIds.Add(t.Id.ToString("N"));
