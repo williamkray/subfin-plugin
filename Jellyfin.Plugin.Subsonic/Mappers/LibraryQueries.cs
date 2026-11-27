@@ -86,6 +86,7 @@ public static class LibraryQueries
         var tracks = library.GetItemList(new InternalItemsQuery(user)
         {
             ParentId = albumGuid,
+            Recursive = true,   // multi-disc albums: tracks live in disc subfolders
             IncludeItemTypes = [BaseItemKind.Audio],
         }).OfType<Audio>().ToList();
         foreach (var t in tracks)

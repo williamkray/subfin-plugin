@@ -405,9 +405,11 @@ public class SubsonicController : ControllerBase
         var album = _library.GetItemById<MusicAlbum>(guid, user);
         if (album == null) return ErrorResponse(format, ErrorCode.NotFound, "Album not found");
 
+        // Recursive: multi-disc albums keep their tracks in disc subfolders (Album/CD 1/...)
         var songs = _library.GetItemList(new InternalItemsQuery(user)
         {
             ParentId = guid,
+            Recursive = true,
             IncludeItemTypes = [BaseItemKind.Audio],
             OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Ascending), (ItemSortBy.IndexNumber, SortOrder.Ascending)],
         }).OfType<Audio>().ToList();
@@ -443,11 +445,21 @@ public class SubsonicController : ControllerBase
         var item = _library.GetItemById<BaseItem>(guid, user);
         if (item == null) return ErrorResponse(format, ErrorCode.NotFound, "Not found");
 
-        var children = _library.GetItemList(new InternalItemsQuery(user)
-        {
-            ParentId = guid,
-            OrderBy = [(ItemSortBy.SortName, SortOrder.Ascending)],
-        });
+        // An album lists its tracks, including those in disc subfolders (Album/CD 1/...);
+        // anything else lists its direct children.
+        var children = item is MusicAlbum
+            ? _library.GetItemList(new InternalItemsQuery(user)
+            {
+                ParentId = guid,
+                Recursive = true,
+                IncludeItemTypes = [BaseItemKind.Audio],
+                OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Ascending), (ItemSortBy.IndexNumber, SortOrder.Ascending), (ItemSortBy.SortName, SortOrder.Ascending)],
+            })
+            : _library.GetItemList(new InternalItemsQuery(user)
+            {
+                ParentId = guid,
+                OrderBy = [(ItemSortBy.SortName, SortOrder.Ascending)],
+            });
 
         // Fallback for special-char artists (e.g. *NSYNC, AC/DC): getIndexes emits the tag entity GUID
         // (parentless, used by AlbumArtistIds), but getMusicDirectory needs the folder/hierarchy entity

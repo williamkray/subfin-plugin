@@ -4,6 +4,7 @@ using System.Linq;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Audio;
+using MediaBrowser.Model.Entities;
 
 namespace Jellyfin.Plugin.Subsonic.Mappers;
 
@@ -120,8 +121,16 @@ public static class ItemMapper
         var size = song.Size ?? 0L;
         var bitRate = duration > 0 && size > 0 ? (int)((size * 8L) / duration / 1000L) : 0;
 
-        // Audio.ParentId is the album's Guid
-        var effectiveAlbumId = albumId ?? song.ParentId.ToString("N");
+        // Audio.ParentId is the containing folder: usually the album, but a disc subfolder for
+        // multi-disc releases (Album/CD 1/...) and the library folder for loose files. AlbumEntity
+        // walks up to the real MusicAlbum (null for loose files).
+        var albumEntity = albumId == null ? song.AlbumEntity : null;
+        var effectiveAlbumId = albumId ?? albumEntity?.Id.ToString("N") ?? song.ParentId.ToString("N");
+        // Songs outside any album would point at a folder with no image; use the song's own
+        // (embedded) cover instead when it has one (GH #4).
+        var coverArt = albumId == null && albumEntity == null && song.HasImage(ImageType.Primary)
+            ? song.Id.ToString("N")
+            : $"al-{effectiveAlbumId}";
         var primaryArtist = artistName ?? song.AlbumArtists.FirstOrDefault() ?? song.Artists.FirstOrDefault() ?? "";
 
         // Get audio stream metadata
@@ -145,7 +154,7 @@ public static class ItemMapper
             ["artistId"] = artistId ?? "",
             ["displayArtist"] = primaryArtist,
             ["displayAlbumArtist"] = primaryArtist,
-            ["coverArt"] = $"al-{effectiveAlbumId}",
+            ["coverArt"] = coverArt,
             ["duration"] = duration,
             ["bitRate"] = bitRate,
             ["track"] = song.IndexNumber ?? 0,
