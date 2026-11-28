@@ -62,12 +62,12 @@ for lib in lib1 lib2; do
 done
 curl -sf -X POST "$J/Library/Refresh" -H "$AH" >/dev/null
 
-# Wait for the scan: 9 tracks in lib1 + 2 in lib2
+# Wait for the scan: 10 tracks in lib1 + 2 in lib2
 for _ in $(seq 1 90); do
   n=$(curl -s "$J/Items?Recursive=true&IncludeItemTypes=Audio&Limit=0" -H "$AH" | jq -r '.TotalRecordCount // 0')
-  [ "$n" -ge 11 ] && break; sleep 2
+  [ "$n" -ge 12 ] && break; sleep 2
 done
-[ "${n:-0}" -ge 11 ] || { echo "library scan incomplete ($n tracks)" >&2; exit 1; }
+[ "${n:-0}" -ge 12 ] || { echo "library scan incomplete ($n tracks)" >&2; exit 1; }
 # ...and for tag extraction (every fixture track has a track number)
 for _ in $(seq 1 60); do
   missing=$(curl -s "$J/Items?Recursive=true&IncludeItemTypes=Audio" -H "$AH" | jq '[.Items[] | select(.IndexNumber == null)] | length')
