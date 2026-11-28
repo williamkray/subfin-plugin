@@ -25,11 +25,14 @@ http() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 seconds() { ffmpeg -v error -i "$1" -f null - -stats 2>&1 | tr '\r' '\n' | grep -o 'time=[0-9:.]*' | tail -1 \
             | awk -F'[=:]' '{printf "%d", $2*3600 + $3*60 + $4 + 0.5}'; }
 item() { curl -s "$BASE/Items?Recursive=true&IncludeItemTypes=$1&SearchTerm=$(jq -rn --arg s "$2" '$s|@uri')" -H "$AH" | jq -r '.Items[0].Id'; }
+song() { api getSong "$OQ" "id=$1" | jq -r ".\"subsonic-response\".song.$2"; }   # song <id> <field> (owner)
+ctype() { curl -s -o /dev/null -w '%{content_type}' "$R/$1.view?$OQ&id=$2"; }       # ctype <method> <id>
 
 DOUBLE=$(item MusicAlbum "Double Album"); SINGLE=$(item MusicAlbum "Single Album"); OTHER=$(item MusicAlbum "Other Album")
 LOOSE=$(item Audio "Loose Track 1"); SONG1=$(item Audio "Single 1"); SONG2=$(item Audio "Single 2"); OTHERSONG=$(item Audio "Other 1")
+M4A=$(item Audio "M4A Track 1")
 # Fail fast on a missed lookup: an id of "null" would make the "denied"/"not found" checks pass vacuously
-for v in DOUBLE SINGLE OTHER LOOSE SONG1 SONG2 OTHERSONG; do
+for v in DOUBLE SINGLE OTHER LOOSE SONG1 SONG2 OTHERSONG M4A; do
   [[ "${!v}" =~ ^[0-9a-f]{32}$ ]] || { echo "fixture lookup failed: $v='${!v}'" >&2; exit 1; }
 done
 
@@ -97,6 +100,15 @@ expect "transcode full length (20s)" "$(seconds "$TMP/full.mp3")" 20
 expect "timeOffset=12 after a prior transcode → 8s" "$(seconds "$TMP/seek.mp3")" 8
 BR=$(ffprobe -v error -show_entries format=bit_rate -of csv=p=0 "$TMP/br.mp3"); BR=$(( ${BR:-0} / 1000 ))
 expect "maxBitRate=64 honoured" "$([ "$BR" -ge 60 ] && [ "$BR" -le 70 ] && echo yes || echo "$BR kbps")" yes
+
+echo "== file types (GH #8)"
+expect "mp3 suffix" "$(song "$SONG1" suffix)" mp3
+expect "mp3 contentType" "$(song "$SONG1" contentType)" audio/mpeg
+expect "m4a suffix is one file type" "$(song "$M4A" suffix)" m4a
+expect "m4a contentType" "$(song "$M4A" contentType)" audio/mp4
+expect "m4a transcodedSuffix" "$(song "$M4A" transcodedSuffix)" m4a
+expect "m4a raw stream Content-Type" "$(ctype stream "$M4A")" audio/mp4
+expect "m4a download Content-Type" "$(ctype download "$M4A")" audio/mp4
 
 echo "== share credentials are scoped"
 SHARE=$(api createShare "$OQ" "id=$SONG1")

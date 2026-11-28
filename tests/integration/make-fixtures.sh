@@ -6,9 +6,10 @@
 #   lib1/Fixture Artist/Double Album/CD 1/0N - ...mp3     multi-disc album in disc subfolders
 #   lib1/Fixture Artist/Double Album/CD 2/0N - ...mp3
 #   lib1/Loose Track N.mp3                                 loose files (no album), embedded cover
+#   lib1/Format Artist/M4A Album/01 - M4A Track 1.m4a      AAC in MP4 (Container is a format list, GH #8)
 #   lib2/Other Artist/Other Album/0N - ...mp3              second library (access-restriction tests)
 #
-# Requires ffmpeg. Tracks are short sine tones with ID3 tags.
+# Requires ffmpeg. Tracks are short sine tones with ID3 tags (MP4 tags for .m4a).
 set -euo pipefail
 
 OUT="${1:-./fixtures}"
@@ -24,8 +25,11 @@ track() {
   if [ -n "$cover" ]; then
     args+=(-i "$cover" -map 0:a -map 1:v -c:v png -disposition:v attached_pic -metadata:s:v title="Cover")
   fi
-  args+=(-c:a libmp3lame -b:a 128k -id3v2_version 3
-         -metadata artist="$artist" -metadata album_artist="$artist"
+  case "$path" in
+    *.m4a) args+=(-c:a aac -b:a 128k) ;;
+    *)     args+=(-c:a libmp3lame -b:a 128k -id3v2_version 3) ;;
+  esac
+  args+=(-metadata artist="$artist" -metadata album_artist="$artist"
          -metadata title="$title" -metadata track="$trackno")
   [ -n "$album" ] && args+=(-metadata album="$album")
   [ -n "$disc" ] && args+=(-metadata disc="$disc")
@@ -44,9 +48,10 @@ done
 for n in 1 2; do
   track "$OUT/lib1/Loose Track $n.mp3" "Loose Artist" "" "Loose Track $n" "$n" "" $((600 + n * 30)) "$COVER"
 done
+track "$OUT/lib1/Format Artist/M4A Album/01 - M4A Track 1.m4a" "Format Artist" "M4A Album" "M4A Track 1" 1 "" 800
 for n in 1 2; do
   track "$OUT/lib2/Other Artist/Other Album/0$n - Other $n.mp3" "Other Artist" "Other Album" "Other $n" "$n" "" $((700 + n * 20))
 done
 rm -f "$COVER"
 echo "fixtures written to $OUT"
-find "$OUT" -name '*.mp3' | sort
+find "$OUT" -name '*.mp3' -o -name '*.m4a' | sort

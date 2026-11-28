@@ -1690,6 +1690,9 @@ public class SubsonicController : ControllerBase
         return existing.AccessToken;
     }
 
+    private static string FileMimeType(Audio item) =>
+        ItemMapper.AudioMimeType(ItemMapper.AudioSuffix(item.Container, item.Path));
+
     private static (string container, string audioCodec, string mimeType) MapTranscodeFormat(string? format) =>
         (format ?? "mp3") switch
         {
@@ -1726,13 +1729,13 @@ public class SubsonicController : ControllerBase
             id, format, bitRate, timeOff, needsTranscode);
 
         if (!needsTranscode)
-            return PhysicalFile(item.Path, ItemMapper.AudioMimeType(item.Container), null, true);
+            return PhysicalFile(item.Path, FileMimeType(item), null, true);
 
         var apiKey = await GetOrCreatePluginApiKey();
         if (string.IsNullOrEmpty(apiKey))
         {
             _logger.LogWarning("[Subfin] Could not obtain plugin API key — serving direct");
-            return PhysicalFile(item.Path, ItemMapper.AudioMimeType(item.Container), null, true);
+            return PhysicalFile(item.Path, FileMimeType(item), null, true);
         }
 
         var (container, audioCodec, mimeType) = MapTranscodeFormat(format);
@@ -1828,7 +1831,7 @@ public class SubsonicController : ControllerBase
         var item = _library.GetItemById<Audio>(guid, user);
         if (item?.Path == null) return NotFound();
 
-        return PhysicalFile(item.Path, ItemMapper.AudioMimeType(item.Container), Path.GetFileName(item.Path), true);
+        return PhysicalFile(item.Path, FileMimeType(item), Path.GetFileName(item.Path), true);
     }
 
     // ── getCoverArt / getAvatar ──────────────────────────────────────────────

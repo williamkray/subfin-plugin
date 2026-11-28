@@ -40,6 +40,36 @@ public class ItemMapperTests
         Assert.Equal(expected, ItemMapper.TicksToSeconds(ticks));
     }
 
+    [Theory]
+    // Jellyfin's Container for MP4-family files is ffprobe's whole format list (GH #8)
+    [InlineData("mov,mp4,m4a,3gp,3g2,mj2", "/music/a.m4a", "m4a")]
+    [InlineData("mov,mp4,m4a,3gp,3g2,mj2", "/music/a.MP4", "mp4")]
+    [InlineData("mov,mp4,m4a,3gp,3g2,mj2", "/music/a.m4b", "m4b")]
+    [InlineData("mov,mp4,m4a,3gp,3g2,mj2", null, "m4a")]
+    [InlineData("mp3", "/music/a.mp3", "mp3")]
+    [InlineData("ogg", "/music/a.opus", "opus")]
+    [InlineData("flac", "/music/v1.0/noext", "flac")]
+    [InlineData("MP3", null, "mp3")]
+    [InlineData("", null, "mp3")]
+    [InlineData(null, null, "mp3")]
+    public void AudioSuffix_IsOneFileType(string? container, string? path, string expected)
+    {
+        Assert.Equal(expected, ItemMapper.AudioSuffix(container, path));
+    }
+
+    [Theory]
+    [InlineData("m4a", "audio/mp4")]
+    [InlineData("mp4", "audio/mp4")]
+    [InlineData("aac", "audio/aac")]
+    [InlineData("mp3", "audio/mpeg")]
+    [InlineData("FLAC", "audio/flac")]
+    [InlineData("xyz", "application/octet-stream")]
+    [InlineData(null, "application/octet-stream")]
+    public void AudioMimeType_MapsSuffix(string? suffix, string expected)
+    {
+        Assert.Equal(expected, ItemMapper.AudioMimeType(suffix));
+    }
+
     [Fact]
     public void ToArtistsIndex_GroupsByLetter()
     {

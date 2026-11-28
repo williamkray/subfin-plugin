@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Entities;
@@ -17,13 +18,32 @@ public static class ItemMapper
     public static int TicksToSeconds(long? ticks) =>
         ticks.HasValue ? (int)(ticks.Value / TicksPerSecond) : 0;
 
-    public static string AudioMimeType(string? container) => container?.ToLowerInvariant() switch
+    /// <summary>
+    /// The Subsonic <c>suffix</c>: the file's extension, which clients name cached files after.
+    /// Jellyfin's <c>Container</c> is only the fallback: it is ffprobe's format name, which for
+    /// the MP4 family (.m4a, .mp4, ...) is the list "mov,mp4,m4a,3gp,3g2,mj2" and broke caching
+    /// when passed through (GH #8).
+    /// </summary>
+    public static string AudioSuffix(string? container, string? path)
+    {
+        var ext = Path.GetExtension(path ?? "").TrimStart('.').ToLowerInvariant();
+        if (ext.Length > 0) return ext;
+        var formats = (container ?? "").ToLowerInvariant()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (formats.Length == 0) return "mp3";
+        return formats.Contains("m4a") ? "m4a" : formats[0];
+    }
+
+    /// <summary>MIME type for a suffix from <see cref="AudioSuffix"/>.</summary>
+    public static string AudioMimeType(string? suffix) => suffix?.ToLowerInvariant() switch
     {
         "mp3" => "audio/mpeg",
         "flac" => "audio/flac",
         "ogg" or "oga" => "audio/ogg",
         "opus" => "audio/ogg; codecs=opus",
-        "aac" or "m4a" => "audio/aac",
+        // .m4a/.mp4 are MP4 files (AAC or ALAC inside); audio/aac means raw ADTS AAC
+        "m4a" or "m4b" or "mp4" => "audio/mp4",
+        "aac" => "audio/aac",
         "wav" => "audio/wav",
         "wma" => "audio/x-ms-wma",
         _ => "application/octet-stream",
@@ -137,8 +157,8 @@ public static class ItemMapper
         var mediaStream = song.GetMediaStreams()
             .FirstOrDefault(s => s.Type == MediaBrowser.Model.Entities.MediaStreamType.Audio);
 
-        var suffix = song.Container?.ToLowerInvariant() ?? "mp3";
-        var mimeType = AudioMimeType(song.Container);
+        var suffix = AudioSuffix(song.Container, song.Path);
+        var mimeType = AudioMimeType(suffix);
         return new()
         {
             ["id"] = song.Id.ToString("N"),
